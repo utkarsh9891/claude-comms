@@ -70,7 +70,8 @@ seeing and approving it.
 ## Gmail
 
 The [gmail plugin](../../plugins/gmail/README.md) ([ADR d38d84](./decisions/2026-11-05-d38d84-gmail-send-through-the-gmail-api.md))
-sends mail as the owner with `gmail-send`. It reads no mail, so it takes in no untrusted text; the risk is
+sends mail as the owner with `gmail-send`. It reads no mail bodies; to reply it reads one email's headers
+([ADR 847f76](./decisions/2026-11-05-847f76-gmail-replies-read-headers-behind-their-own-scan.md)). The main risk is
 something on the Mac (an assistant steered by text it read elsewhere, or any process running as the owner)
 sending mail the owner didn't approve. Rule: **no mail or draft leaves without the owner's Touch ID.**
 
@@ -80,9 +81,10 @@ sending mail the owner didn't approve. Rule: **no mail or draft leaves without t
 | G2 | A send attaches an arbitrary file (`--file ~/.ssh/id_rsa`) | Attachments and the `--html` file only from the `send_from` folders (default `~/Downloads`, `~/Desktop`, `~/Documents`, `~/Pictures`), resolved through symlinks, refusing any hidden path component; 25 MB in total | `test_sendable_*` (dot-dot, symlink, hidden, outside), `test_html_file_obeys_send_folders`, `test_cli_dry_run_end_to_end` |
 | G3 | A crafted address or subject adds hidden recipients (`a@x.com\nBcc: …`) | Recipients must be plain addresses; Python's `email` package refuses line breaks in headers | `test_recipients_refuse_anything_but_plain_addresses`, `test_subject_newline_cannot_inject_headers` |
 | G4 | Another process or page captures the sign-in | Loopback redirect on 127.0.0.1 only, PKCE (S256) and a random `state` compared in constant time; a reply with the wrong state is ignored before any token request | `test_login_full_flow`, `test_login_rejects_wrong_state` |
-| G5 | The sign-in leaks or is broader than needed | Scopes `gmail.compose`, `openid`, `email` (send and drafts; no reading); the token reaches the helper on stdin, never a command line, and the one-hour access token is used once and never stored; client and config files 0600 in a 0700 folder; `logout` revokes at Google | `test_token_goes_to_the_helper_on_stdin_never_argv`, `test_access_token_unlocks_once_with_the_reason`, `test_setup_accepts_only_desktop_clients_and_stores_privately`, `test_logout_revokes_and_deletes` |
+| G5 | The sign-in leaks or is broader than needed | Scopes `gmail.compose`, `gmail.metadata`, `openid`, `email` (send, drafts, headers for replies; no bodies); the token reaches the helper on stdin, never a command line, and the one-hour access token is used once and never stored; client and config files 0600 in a 0700 folder; `logout` revokes at Google | `test_token_goes_to_the_helper_on_stdin_never_argv`, `test_access_token_unlocks_once_with_the_reason`, `test_setup_accepts_only_desktop_clients_and_stores_privately`, `test_logout_revokes_and_deletes` |
 | G6 | A subject or file name disguises the prompt (control or bidi characters) | Control, zero-width and bidi characters are removed and long values cut before the prompt | `test_reason_names_recipients_subject_files_and_cleans_text` |
 | G7 | An OAuth client or other personal config lands in this public repo | `.gitignore` excludes `client_secret*.json`; the docs gate fails on any tracked one | `scripts/check-docs.py` (CI `docs`) |
+| G9 | A reply leaks who wrote to the owner, or the original's header text steers the reply | Replies read **headers only** (`gmail.metadata`: no bodies or attachments) of the one message named, after **their own Touch ID scan** ("…to prepare a reply; nothing is sent"); the send then asks again naming the recipients found; reused header text has line breaks, control and bidi characters removed; the owner is never added as a recipient | `test_reply_all_threads_and_asks_twice`, `test_dry_run_reply_reads_headers_but_never_asks_to_send`, `test_reply_refusals`, `test_original_subject_cannot_disguise_the_prompt` |
 | G8 | Mail goes out another way, around Touch ID | A hosted Gmail connector's send, reply, forward and draft tools are denied in the owner's Claude Code settings (deny rules hold in every permission mode), or it is disconnected. Owner's setting, outside this repo | the owner's `~/.claude/settings.json` |
 
 **Residual risks (accepted):**

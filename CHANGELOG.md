@@ -3,6 +3,14 @@
 Notable changes per plugin version (`plugins/<plugin>/.claude-plugin/plugin.json`); unprefixed headings are the
 `whatsapp` plugin. Back to [AGENTS.md](./AGENTS.md).
 
+## gmail 0.2.0 — 2026-11-05
+
+- **Replies in a thread:** `gmail-send --reply-to <message id> [--all]` answers in the original's thread
+  (`In-Reply-To`, `References`, thread id), to its sender or with `--all` to everyone on it, subject "Re: …".
+  It reads only the original's headers, after its own Touch ID scan, then asks again to send
+  ([ADR 847f76](./docs/architecture/decisions/2026-11-05-847f76-gmail-replies-read-headers-behind-their-own-scan.md)).
+  Run `gmail-send login` once more to allow reading headers.
+
 ## gmail 0.1.0 — 2026-11-05
 
 - **New plugin, `gmail-send`** ([ADR d38d84](./docs/architecture/decisions/2026-11-05-d38d84-gmail-send-through-the-gmail-api.md)):
