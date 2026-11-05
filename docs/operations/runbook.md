@@ -113,7 +113,7 @@ delete `~/.whatsapp-mcp` and remove the device under **Linked devices** on the p
 
 | Symptom | Check | Fix |
 |---|---|---|
-| install fails building the Touch ID helper: *this SDK is not supported by the compiler* | the Command Line Tools ship an SDK newer than their compiler | the installer now retries with each older installed SDK and says which it used; if none works, update the Command Line Tools (`softwareupdate --list`, or `xcode-select --install`) |
+| install fails building the Touch ID helper (*this SDK is not supported by the compiler*) or linking the bridge (*unknown architecture … arm64e*) | the Command Line Tools ship an SDK newer than their compilers | the installer finds an older installed SDK that builds the helper, says which, and builds the bridge against it too; if none works, update the Command Line Tools (`softwareupdate --list`, or `xcode-select --install`) |
 | `paired: no` after it worked | phone unlinked the device, or it expired | `install.sh pair <number>` |
 | no new messages | `install.sh status`, `tail ~/.whatsapp-mcp/bridge.log` | `install.sh service`; if logged out, pair again |
 | chat missing in `digest` | `wa-allow list <name>`: no `*`, or ⏳ pending | `wa-allow add` it; for ⏳, check the exact name or use the JID |

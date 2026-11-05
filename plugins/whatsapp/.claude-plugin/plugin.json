@@ -1,6 +1,6 @@
 {
   "name": "whatsapp",
-  "version": "0.10.2",
+  "version": "0.10.3",
   "description": "Read, triage and reply to WhatsApp from a dedicated Claude Code session, with a chat allowlist and a hard block on bypass-permissions mode.",
   "author": {
     "name": "Utkarsh Upadhyay"
