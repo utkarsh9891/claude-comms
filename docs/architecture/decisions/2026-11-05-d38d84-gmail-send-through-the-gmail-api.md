@@ -62,7 +62,8 @@ small Swift helper, **Gmail for Claude**:
   running as the owner can still show a misleading prompt by calling the helper itself; the owner reads what they
   approve.
 - One-time setup per machine: create the OAuth client, `gmail-send setup <client file>`, `gmail-send login`. The
-  sign-in must be repeated after fingerprints change, after `logout`, or if Google revokes it.
+  sign-in must be repeated after fingerprints change, after `logout`, or if Google revokes it. `logout` needs no
+  scan: it deletes the sealed sign-in and its key; revoking at Google is the owner's step on Google's page.
 - Every send costs one scan, mail to yourself included.
 - The gmail plugin shares no runtime with WhatsApp: a dropped WhatsApp pairing can't block mail.
 

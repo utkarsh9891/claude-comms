@@ -8,11 +8,14 @@ Notable changes per plugin version (`plugins/<plugin>/.claude-plugin/plugin.json
 - **Replies in a thread:** `gmail-send --reply-to <message id> [--all]` answers in the original's thread
   (`In-Reply-To`, `References`, thread id), to its sender or with `--all` to everyone on it, subject "Re: …",
   with the original **quoted below**, as Gmail does (`--no-quote` to leave it out; the quoted text is never
-  printed). It reads only that email, after its own Touch ID scan, then asks again to send
+  printed). One Touch ID scan reads that email and sends; `--dry-run` lists the recipients first
   ([ADR 847f76](./docs/architecture/decisions/2026-11-05-847f76-gmail-replies-read-headers-behind-their-own-scan.md)).
   Run `gmail-send login` once more to allow reading the email you reply to.
-- **Your Gmail signature** is added to every send, reply and draft, under your text and above any quote, as
-  Gmail does; `--no-signature` leaves it out.
+- **Your signature** is saved from Gmail at sign-in to `~/.gmail-send/signature.html` (editable;
+  `gmail-send signature --refresh` fetches it again) and added to every send, reply and draft, under your text
+  and above any quote, as Gmail does; `--no-signature` leaves it out.
+- `--html -` reads the HTML version from stdin, so no file is needed.
+- `gmail-send logout` no longer asks for Touch ID: it deletes the sealed sign-in and its key from the Mac.
 
 ## gmail 0.1.0 — 2026-11-05
 

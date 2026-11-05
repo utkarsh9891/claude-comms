@@ -19,7 +19,7 @@ Set up gmail-send with the plugin's installer at `${CLAUDE_PLUGIN_ROOT}/bin/inst
    `${CLAUDE_PLUGIN_ROOT}/bin/install.sh approve-test`, and report the result.
 6. Run `install.sh status` again and report it, then the usage:
    `gmail-send <to> -s "<subject>" [--cc <addr>] [--html <file>] --file <path> [--draft] "<text>"`, and replies
-   `gmail-send --reply-to <message id> [--all] [--no-quote] [--draft] "<text>"` (two scans; quotes the original);
+   `gmail-send --reply-to <message id> [--all] [--no-quote] [--draft] "<text>"` (one scan; quotes the original);
    `me` is your
    own address; every send and draft asks for Touch ID; attachments come only from ~/Downloads, ~/Desktop,
    ~/Documents and ~/Pictures.

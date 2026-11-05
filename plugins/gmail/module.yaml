@@ -12,12 +12,12 @@ consumes: []            # Python standard library only, run by uv
 language: python
 runtime:
   python: ">=3.11"
-data_dir: "$GMAIL_SEND_HOME (default ~/.gmail-send): client.json, config.json, token.sealed, key.se (0600), app/"
+data_dir: "$GMAIL_SEND_HOME (default ~/.gmail-send): client.json, config.json, signature.html, token.sealed, key.se (0600), app/"
 secrets: "refresh token sealed to a Touch ID-only Secure Enclave key (token.sealed + key.se)"
 interfaces:
   - "gmail-send <to> -s <subject> [--cc …] [--file …] [--html <file>] [--draft] [--dry-run] [text… | -]"
   - "gmail-send --reply-to <message id> [--all] [--no-quote] [--to …] [--cc …] [-s …] [--draft] [--dry-run] [text…]"
-  - "gmail-send setup <client_secret.json> | login | status | logout"
+  - "gmail-send setup <client_secret.json> | login | status | logout | signature [--refresh]"
   - "GET https://gmail.googleapis.com/gmail/v1/users/me/messages/<id>?format=raw (replies; format=metadata with --no-quote)"
   - "POST https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=media (message/rfc822)"
   - "POST https://gmail.googleapis.com/upload/gmail/v1/users/me/drafts?uploadType=media (message/rfc822)"

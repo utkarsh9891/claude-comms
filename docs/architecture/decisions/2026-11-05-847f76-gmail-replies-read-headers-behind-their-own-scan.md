@@ -1,4 +1,4 @@
-# 2026-11-05-847f76 — Gmail replies in a thread, quoting the original: read that one email behind its own Touch ID scan
+# 2026-11-05-847f76 — Gmail replies in a thread, quoting the original, in one Touch ID scan
 
 - **Status:** accepted
 - **Date:** 2026-11-05
@@ -19,10 +19,11 @@ agreed that reading mail *for context* stays with a hosted connector, not `gmail
 - `gmail-send --reply-to <Gmail message id> [--all] [--no-quote]` reads **only that one email**: the whole message
   (`format=raw`, scope **`gmail.readonly`**) to thread and quote it, or with `--no-quote` its headers only
   (`format=metadata`).
-- The read unlocks the sign-in like any send: **its own Touch ID scan**, with a prompt naming the message id and
-  saying nothing is sent. Sending (or `--draft`) then asks again, now naming the recipients found, the original's
-  subject and sender, and that it is quoted. Two scans per reply: the recipients of a reply-all aren't known until
-  the original is read, and the send prompt must name every recipient.
+- **One Touch ID scan per reply** unlocks the sign-in, reads the original and sends (or saves the draft). The
+  prompt comes before the read, so it names the email and the rule for its recipients ("to its sender" or "to
+  everyone on it"), plus any `--to`/`--cc` given, the attachments and the start of the text, but not the
+  reply-all names or the original's subject. `--dry-run` reads the original (one scan) and lists them, sending
+  nothing.
 - **Quoting by default**, as Gmail does: "On <date>, <sender> wrote:" and the original's text with `>` in the
   plain version; Gmail's `gmail_quote` markup around the original's HTML (or its escaped text) in the HTML version,
   so Gmail folds it behind "•••". An HTML-only original is quoted as text too.
@@ -33,9 +34,10 @@ agreed that reading mail *for context* stays with a hosted connector, not `gmail
   replaces "Re: <subject>".
 - The message carries `In-Reply-To` and `References`, and goes up with the thread id (multipart upload).
 - Header text reused in a subject or shown in a prompt has line breaks, control and bidi characters removed.
-- **The owner's Gmail signature** is added to every send, reply and draft, as Gmail does: under the owner's text,
-  above any quote; `--no-signature` leaves it out. It is read from the owner's own send-as settings with the
-  login the send scan already unlocked (no extra scan); if it can't be read, the mail goes without it.
+- **The owner's signature** is kept in `~/.gmail-send/signature.html` (0600) and added to every send, reply and
+  draft, as Gmail does: under the owner's text, above any quote; `--no-signature` leaves it out. It is saved from
+  Gmail's send-as settings at `gmail-send login` (with the fresh sign-in, no scan) and by
+  `gmail-send signature --refresh` (one scan); the owner may edit the file. Sends never look it up.
 - The sign-in holds `gmail.readonly`, **not** `gmail.metadata`: with `gmail.metadata` in a sign-in, Gmail refuses
   full messages even when `gmail.readonly` is also granted. A `gmail.metadata` sign-in (0.2.0) still replies with
   `--no-quote`.
@@ -43,12 +45,13 @@ agreed that reading mail *for context* stays with a hosted connector, not `gmail
 ## Assumptions
 - 1. Thread id, `References`/`In-Reply-To` and a matching subject are enough for Gmail to thread (Gmail's
      documented rules; verified live 2026-11-05).
-- 2. Two scans per reply is acceptable to the owner (2026-11-05).
+- 2. The owner prefers one scan per reply over a prompt that lists reply-all names (2026-11-05).
 - 3. Reading mail for context belongs to a hosted connector; `gmail-send` reads only the email being answered
      and the owner's own signature (owner, 2026-11-05).
 
 ## Reversal triggers
-- Revisit if two scans per reply is too much friction (Assumption #2).
+- Revisit if a reply-all ever goes to someone the owner didn't expect (Assumption #2): bring back a second scan
+  that names them.
 - Revisit if `gmail-send` is asked to read mail beyond the email being answered (Assumption #3): that would bring
   other people's text into sessions and needs its own ADR.
 
@@ -62,5 +65,5 @@ agreed that reading mail *for context* stays with a hosted connector, not `gmail
   hosted connector gives them only with the whole message) and would retype someone else's email, which can change
   words silently. Rejected.
 - `gmail.metadata` plus `gmail.readonly`: Gmail then refuses full messages.
-- One scan for both read and send: its prompt couldn't name reply-all recipients.
+- Two scans per reply (read, then send naming everyone): the owner found it too much.
 - No quoting: readers outside Gmail lose the history. Rejected by the owner.

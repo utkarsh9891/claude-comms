@@ -16,29 +16,31 @@ gmail-send a@example.com,b@example.com --cc c@example.com -s "Oct report" \
   --file ~/Downloads/report.pdf "Hi both, the October report is attached."
 gmail-send a@example.com -s "Oct report" --file ~/Downloads/report.pdf --draft "…"  # to Gmail Drafts; send it from Gmail
 gmail-send me -s "Formatted" --html ~/Documents/body.html "plain-text version"  # HTML with a text fallback
+echo "<p>Hi</p>" | gmail-send me -s "Formatted" --html - "plain-text version"   # HTML from stdin: no file needed
 echo "body from a pipe" | gmail-send me -s "Piped" -
-gmail-send --reply-to 1a1ab97a1a956b87 --all "Thanks, noted."                 # reply-all in the thread, original quoted (two scans)
+gmail-send --reply-to 1a1ab97a1a956b87 --all "Thanks, noted."                 # reply-all in the thread, original quoted (one scan)
 gmail-send --reply-to 1a1ab97a1a956b87 --no-quote "Short and sweet."          # without the quoted original
 gmail-send --reply-to 1a1ab97a1a956b87 --file ~/Downloads/v2.pdf --draft "v2 attached"  # reply to the sender, as a draft
 gmail-send a@example.com -s "Check" --file ~/Desktop/x.pdf --dry-run "…"     # show what would be sent; send nothing
 ```
 
-Before asking, `gmail-send` prints the from, to, cc, subject, each attachment with its size and SHA-256, and the
-text. The Touch ID prompt ("Gmail for Claude is trying to send an email to …", or "save a draft email to …")
+`gmail-send` prints the from, to, cc, subject, each attachment with its size and SHA-256, and the text (for a
+new email before asking; for a reply once the original is read). It writes no email content to disk. The Touch ID prompt ("Gmail for Claude is trying to send an email to …", or "save a draft email to …")
 names every recipient ("you" for yourself), the subject, each attachment and the start of the text. Declining, a
 120 s timeout or a missing helper sends nothing.
 
 **Replies** (`--reply-to <Gmail message id>`, the id from the Gmail URL or the connector) stay in the original
-thread: `In-Reply-To`, `References` and the thread id are set from the original, which `gmail-send` reads after
-its own Touch ID scan. The original is **quoted below your text**, as Gmail does ("On … wrote:", folded behind
+thread: `In-Reply-To`, `References` and the thread id are set from the original, which `gmail-send` reads within
+the reply's **one** Touch ID scan. The original is **quoted below your text**, as Gmail does ("On … wrote:", folded behind
 "•••" in Gmail), unless `--no-quote`; the quoted text is never printed, only counted. It answers Reply-To or the sender (your own
 email: its To); `--all` adds everyone on the original except you; the subject is "Re: <original>". `--to`, `--cc`
-and `-s` replace those. The send then asks for a second scan naming the recipients
+and `-s` replace those. The prompt names the email and "its sender" or "everyone on it"; `--dry-run` lists the
+names first
 ([ADR 847f76](../../docs/architecture/decisions/2026-11-05-847f76-gmail-replies-read-headers-behind-their-own-scan.md)).
 
-**Your Gmail signature** is added under your text (above any quote) on every send, reply and draft, as Gmail
-does; `--no-signature` leaves it out. It's read with the login the send's Touch ID scan unlocked, so no extra
-scan; with no signature set, nothing is added.
+**Your signature** lives in `~/.gmail-send/signature.html`: saved from Gmail when you sign in, editable, and
+added under your text (above any quote) on every send, reply and draft, as Gmail does; `--no-signature` leaves it
+out. `gmail-send signature` shows it; `gmail-send signature --refresh` fetches Gmail's again (one scan).
 
 **Attachments** (and an `--html` file) come only from `~/Downloads`, `~/Desktop`, `~/Documents` and
 `~/Pictures`, after resolving symlinks, never from a hidden file or folder, 25 MB in total. Copy a file into one of
@@ -82,11 +84,12 @@ admin to allow this client, or use the hosted Gmail connector for text-only mail
 | Command | What it does |
 |---|---|
 | `gmail-send <to> -s <subject> [--cc …] [--file …]… [--html <file>] [--draft] [--dry-run] [--no-signature] [text… \| -]` | send (or save a draft); `me` is your address; addresses are plain and comma-separated |
-| `gmail-send --reply-to <id> [--all] [--no-quote] [--to …] [--cc …] [-s …] [--file …]… [--html …] [--draft] [--dry-run] [text…]` | reply in the original's thread, quoting it (two scans: read it, then send) |
+| `gmail-send --reply-to <id> [--all] [--no-quote] [--to …] [--cc …] [-s …] [--file …]… [--html …] [--draft] [--dry-run] [text…]` | reply in the original's thread, quoting it (one scan) |
 | `gmail-send setup <client_secret….json>` | store your Desktop-app client (rejects other client types) |
 | `gmail-send login` | Google sign-in in the browser (send, drafts; read an email only to reply to it); locks the sign-in to Touch ID |
 | `gmail-send status` | client, signed-in account, Touch ID helper, send folders |
-| `gmail-send logout` | revoke the sign-in at Google (one scan) and delete it here |
+| `gmail-send logout` | delete the sign-in from this Mac (no scan); remove the app's access at Google on [your account's connections page](https://myaccount.google.com/connections) |
+| `gmail-send signature [--refresh]` | show the saved signature, or fetch Gmail's again (one scan) |
 | `bin/install.sh [install\|status\|approve-test\|uninstall]` | build and link; show state; one test prompt; remove the app |
 
 Run `gmail-send login` again if a send says your sign-in **expired or was revoked**, or after you add or remove a
@@ -103,5 +106,5 @@ fingerprint (the lock is tied to the enrolled fingers).
 | [`commands/gmail-setup.md`](./commands/gmail-setup.md) | `/gmail-setup [client file]`: install, store the client, sign in, test Touch ID |
 | [`tests/`](./tests/test_gmailsend.py) | send folders, message round trip, the lock (with a stand-in helper), sign-in through the real loopback server, the command |
 
-On this machine, not in the repo: `~/.gmail-send/client.json`, `config.json`, `token.sealed` and `key.se`
+On this machine, not in the repo: `~/.gmail-send/client.json`, `config.json`, `signature.html`, `token.sealed` and `key.se`
 (0600, folder 0700; the last two useless without your Touch ID on this Mac), and the built `~/.gmail-send/app/`.
