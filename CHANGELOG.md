@@ -11,6 +11,8 @@ Notable changes per plugin version (`plugins/<plugin>/.claude-plugin/plugin.json
   printed). It reads only that email, after its own Touch ID scan, then asks again to send
   ([ADR 847f76](./docs/architecture/decisions/2026-11-05-847f76-gmail-replies-read-headers-behind-their-own-scan.md)).
   Run `gmail-send login` once more to allow reading the email you reply to.
+- **Your Gmail signature** is added to every send, reply and draft, under your text and above any quote, as
+  Gmail does; `--no-signature` leaves it out.
 
 ## gmail 0.1.0 — 2026-11-05
 

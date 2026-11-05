@@ -33,6 +33,9 @@ agreed that reading mail *for context* stays with a hosted connector, not `gmail
   replaces "Re: <subject>".
 - The message carries `In-Reply-To` and `References`, and goes up with the thread id (multipart upload).
 - Header text reused in a subject or shown in a prompt has line breaks, control and bidi characters removed.
+- **The owner's Gmail signature** is added to every send, reply and draft, as Gmail does: under the owner's text,
+  above any quote; `--no-signature` leaves it out. It is read from the owner's own send-as settings with the
+  login the send scan already unlocked (no extra scan); if it can't be read, the mail goes without it.
 - The sign-in holds `gmail.readonly`, **not** `gmail.metadata`: with `gmail.metadata` in a sign-in, Gmail refuses
   full messages even when `gmail.readonly` is also granted. A `gmail.metadata` sign-in (0.2.0) still replies with
   `--no-quote`.
@@ -42,7 +45,7 @@ agreed that reading mail *for context* stays with a hosted connector, not `gmail
      documented rules; verified live 2026-11-05).
 - 2. Two scans per reply is acceptable to the owner (2026-11-05).
 - 3. Reading mail for context belongs to a hosted connector; `gmail-send` reads only the email being answered
-     (owner, 2026-11-05).
+     and the owner's own signature (owner, 2026-11-05).
 
 ## Reversal triggers
 - Revisit if two scans per reply is too much friction (Assumption #2).

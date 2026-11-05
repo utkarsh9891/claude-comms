@@ -36,6 +36,10 @@ email: its To); `--all` adds everyone on the original except you; the subject is
 and `-s` replace those. The send then asks for a second scan naming the recipients
 ([ADR 847f76](../../docs/architecture/decisions/2026-11-05-847f76-gmail-replies-read-headers-behind-their-own-scan.md)).
 
+**Your Gmail signature** is added under your text (above any quote) on every send, reply and draft, as Gmail
+does; `--no-signature` leaves it out. It's read with the login the send's Touch ID scan unlocked, so no extra
+scan; with no signature set, nothing is added.
+
 **Attachments** (and an `--html` file) come only from `~/Downloads`, `~/Desktop`, `~/Documents` and
 `~/Pictures`, after resolving symlinks, never from a hidden file or folder, 25 MB in total. Copy a file into one of
 those first. To change the folders, set `"send_from": [...]` in `~/.gmail-send/config.json`.
@@ -77,7 +81,7 @@ admin to allow this client, or use the hosted Gmail connector for text-only mail
 
 | Command | What it does |
 |---|---|
-| `gmail-send <to> -s <subject> [--cc …] [--file …]… [--html <file>] [--draft] [--dry-run] [text… \| -]` | send (or save a draft); `me` is your address; addresses are plain and comma-separated |
+| `gmail-send <to> -s <subject> [--cc …] [--file …]… [--html <file>] [--draft] [--dry-run] [--no-signature] [text… \| -]` | send (or save a draft); `me` is your address; addresses are plain and comma-separated |
 | `gmail-send --reply-to <id> [--all] [--no-quote] [--to …] [--cc …] [-s …] [--file …]… [--html …] [--draft] [--dry-run] [text…]` | reply in the original's thread, quoting it (two scans: read it, then send) |
 | `gmail-send setup <client_secret….json>` | store your Desktop-app client (rejects other client types) |
 | `gmail-send login` | Google sign-in in the browser (send, drafts; read an email only to reply to it); locks the sign-in to Touch ID |
