@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 import threading
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -706,3 +707,129 @@ def test_html_from_stdin_needs_no_file(tmp_path, send_dir, home):
     r = subprocess.run([sys.executable, str(script), "me", "-s", "Hi", "--html", "-", "--dry-run", "-"],
                        input="x", capture_output=True, text=True, env=env, cwd=tmp_path)
     assert r.returncode == 1 and "not both" in r.stderr
+
+
+# ---------- armed sends (ADR 2026-11-05-c41e0b)
+
+
+class Key:
+    """Stands in for the scan that mints Google's one-hour key."""
+
+    def __init__(self, lives=3599):
+        self.reasons, self.lives = [], lives
+
+    def __call__(self, reason):
+        self.reasons.append(reason)
+        return "armed-key", self.lives
+
+
+@pytest.mark.parametrize("pattern,value,ok", [
+    ("Build {id} is green: {url}", "Build PR-42 is green: https://ci.example.com/42", True),
+    ("Build {id} is green: {url}", "Build PR 42 is green: https://ci.example.com/42", False),
+    ("{num} leads today", "1,204 leads today", True),
+    ("{num} leads today", "many leads today", False),
+    ("Note: {text}", "Note: all good", True),
+    ("Note: {text}", "Note: line one\nline two", False),
+    ("Literal {{braces}}", "Literal {braces}", True),
+    ("Exact", "Exact and more", False),
+])
+def test_patterns_match_the_whole_value(pattern, value, ok):
+    assert bool(g.compile_pattern(pattern, "text")[0].match(value)) is ok
+
+
+@pytest.mark.parametrize("pattern,msg", [
+    ("Hi {name}", "unknown slot"), ("Hi {id", "without a closing"), ("Hi }", "without an opening"),
+    ("x" * 151, "at most 150"), ("Hi‮evil", "text-direction"), ("Hi\x07", "control"),
+])
+def test_bad_patterns_refused(pattern, msg):
+    with pytest.raises(g.Refused, match=msg):
+        g.compile_pattern(pattern, "text")
+
+
+def test_arm_needs_fixed_text_a_sane_count_and_at_most_an_hour(send_dir):
+    k = Key()
+    for kwargs, msg in (({"subject_pattern": "{text}", "text_pattern": "{url}"}, "fixed text"),
+                        ({"subject_pattern": "Build {id}", "text_pattern": "", "times": 21}, "1 to 20"),
+                        ({"subject_pattern": "Build {id}", "text_pattern": "", "for_value": "2h"}, "at most 1 hour"),
+                        ({"subject_pattern": "Build {id}", "text_pattern": "", "for_value": "soon"}, "30m")):
+        with pytest.raises(g.Refused, match=msg):
+            g.arm(["me"], [], key=k, out=lambda *_: None, **kwargs)
+    assert k.reasons == []  # refused before any scan
+
+
+def test_arm_prompt_shows_everything_and_stores_the_key_privately(send_dir, home):
+    k, out = Key(), []
+    e = g.arm(["x@example.com"], ["me"], "Build {id} done", "Details: {url}", for_value="45m", times=3,
+              key=k, clock=lambda: 1000.0, out=out.append)
+    (reason,) = k.reasons
+    assert reason.startswith("send 3 emails without asking, within 45 min, to x@example.com, cc owner@example.com;")
+    assert 'subject "Build {id} done"; text "Details: {url}"' in reason and "{id} is a short ID" in reason
+    assert reason.endswith("no files, no HTML")
+    assert e["until"] == 1000.0 + 45 * 60 and e["left"] == 3
+    path = g.armed_path()
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600 and json.loads(path.read_text())[0]["key"] == "armed-key"
+    assert all("key" not in a for a in g.armed_list())
+
+
+def test_window_never_outlives_the_key(send_dir):
+    e = g.arm(["me"], [], "Ping {num}", "", key=Key(lives=3599), clock=lambda: 0.0, out=lambda *_: None)
+    assert e["until"] == 3599 - g.KEY_MARGIN
+
+
+def test_matching_send_uses_the_armed_key_without_a_scan(send_dir):
+    g.arm(["x@example.com"], [], "Build {id} done", "Details: {url}", times=2, key=Key(), out=lambda *_: None)
+    c, out = Calls(), []
+    g.send(["x@example.com"], [], "Build PR-7 done", "Details: https://ci.example.com/7", [], post_raw=c.post,
+           token=c.token, out=out.append)
+    assert c.reasons == [] and c.posted[0][2]["Authorization"] == "Bearer armed-key"
+    assert any("sending without Touch ID (1 left" in line for line in out)
+    g.send(["x@example.com"], [], "Build PR-8 done", "Details: https://ci.example.com/8", [], post_raw=c.post,
+           token=c.token, out=lambda *_: None)
+    assert c.reasons == [] and g.armed_list() == []  # used up: deleted, key gone from disk
+    assert not g.armed_path().exists()
+
+
+def test_anything_else_asks_as_usual(send_dir):
+    g.arm(["x@example.com"], [], "Build {id} done", "Details: {url}", times=5, key=Key(), out=lambda *_: None)
+    (send_dir / "r.pdf").write_bytes(b"%PDF")
+    cases = [
+        (["y@example.com"], [], "Build PR-7 done", "Details: https://a.b/7", {}),               # other recipient
+        (["x@example.com"], ["z@example.com"], "Build PR-7 done", "Details: https://a.b/7", {}),  # extra cc
+        (["x@example.com"], [], "Build PR-7 failed", "Details: https://a.b/7", {}),             # subject differs
+        (["x@example.com"], [], "Build PR-7 done", "Details: http://a.b/7", {}),                # not https
+        (["x@example.com"], [], "Build PR-7 done", "Details: https://a.b/7", {"files": [send_dir / "r.pdf"]}),
+        (["x@example.com"], [], "Build PR-7 done", "Details: https://a.b/7", {"html_text": "<b>x</b>"}),
+        (["x@example.com"], [], "Build PR-7 done", "Details: https://a.b/7", {"draft": True}),
+    ]
+    for to, cc, subject, text, extra in cases:
+        c = Calls()
+        files = extra.pop("files", [])
+        g.send(to, cc, subject, text, files, post_raw=c.post, token=c.token, out=lambda *_: None, **extra)
+        assert len(c.reasons) == 1, (to, cc, subject, extra)
+    assert g.armed_list()[0]["left"] == 5  # none of those used it
+
+
+def test_expired_window_is_deleted_and_asks(send_dir, monkeypatch):
+    g.arm(["me"], [], "Ping {num}", "", key=Key(), clock=lambda: time.time() - 4000, out=lambda *_: None)
+    assert g.armed_list() == [] and not g.armed_path().exists()
+    c = Calls()
+    g.send(["me"], [], "Ping 5", "", [], post_raw=c.post, token=c.token, out=lambda *_: None)
+    assert len(c.reasons) == 1
+
+
+def test_refused_send_gives_the_use_back(send_dir):
+    g.arm(["me"], [], "Ping {num}", "", key=Key(), out=lambda *_: None)
+
+    def refuse(*a):
+        raise g.Refused("Google said HTTP 500")
+
+    with pytest.raises(g.Refused):
+        g.send(["me"], [], "Ping 5", "", [], post_raw=refuse, token=Calls().token, out=lambda *_: None)
+    assert g.armed_list()[0]["left"] == 1
+
+
+def test_disarm_one_or_all_without_a_scan(send_dir):
+    a = g.arm(["me"], [], "Ping {num}", "", key=Key(), out=lambda *_: None)
+    g.arm(["me"], [], "Pong {num}", "", key=Key(), out=lambda *_: None)
+    assert g.disarm(a["id"]) == 1 and [e["subject"] for e in g.armed_list()] == ["Pong {num}"]
+    assert g.disarm() == 1 and not g.armed_path().exists()

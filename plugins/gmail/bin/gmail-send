@@ -6,6 +6,9 @@
 
   gmail-send <to>[,<to>…] -s "<subject>" [--cc <addr>[,…]] [--file <path>]… [--html <file>] [--draft] [--no-signature] [text… | -]
   gmail-send --reply-to <message id> [--all] [--no-quote] [--to …] [--cc …] [-s …] [--file …] [--html …] [--draft] [text… | -]
+  gmail-send --arm <to>[,…] [--cc …] -s "<subject pattern>" [--for 45m] [--times N] "<text pattern>"
+  gmail-send --armed                       list armed patterns
+  gmail-send --disarm [<id>]               drop one armed pattern, or all (no Touch ID)
   gmail-send setup <client_secret….json>   store your Desktop-app OAuth client (once per machine)
   gmail-send login                         sign in to Google (send, drafts; read an email only to reply to it)
   gmail-send status                        client, account, Touch ID helper, send folders
@@ -24,7 +27,13 @@ Drafts instead of sending (check and send it from Gmail). --dry-run prints what 
 Your signature (~/.gmail-send/signature.html, saved from Gmail at login; edit freely) is added under your text,
 above any quote, unless --no-signature.
 
-Every send, draft and reply, to anyone including yourself, waits for one Touch ID scan ("Gmail for Claude"):
+--arm approves, with one Touch ID scan now, up to N emails (--times, default 1, at most 20) to exactly those
+recipients whose subject and text fit the patterns, sent later without asking, within --for (default and at most
+1 hour: Google's key lifetime). Patterns are fixed text with slots: {num} a number, {id} a short ID (ticket, PR,
+branch, SHA), {url} one https link, {text} any line up to 100 characters; {{ and }} are literal braces. Files,
+HTML, drafts and replies never use an armed pattern.
+
+Otherwise every send, draft and reply, to anyone including yourself, waits for one Touch ID scan ("Gmail for Claude"):
 the Google sign-in is stored only locked to it. The prompt names every recipient, the subject, each attachment
 and the start of the text; for a reply, the email and "its sender" or "everyone on it" (names you give with
 --to/--cc are listed). Attachments come only from ~/Downloads, ~/Desktop, ~/Documents and ~/Pictures (no hidden
@@ -34,6 +43,17 @@ import argparse
 import sys
 
 import gmailsend as g
+
+
+def arm_args(argv):
+    p = argparse.ArgumentParser(prog="gmail-send --arm", add_help=False)
+    p.add_argument("to")
+    p.add_argument("--cc", action="append", default=[])
+    p.add_argument("-s", "--subject", required=True)
+    p.add_argument("--for", dest="for_value")
+    p.add_argument("--times", type=int, default=1)
+    p.add_argument("text", nargs="*")
+    return p.parse_intermixed_args(argv)
 
 
 def send_args(argv):
@@ -78,6 +98,21 @@ def main(argv):
             who = g.logout()
             print(f"Signed out {who}: the sealed sign-in and its key are deleted from this Mac. To also remove "
                   f"the app's access at Google: {g.REVOKE_PAGE}" if who else "Not signed in.")
+        elif cmd == "--arm":
+            a = arm_args(argv[1:])
+            g.arm([a.to], a.cc, a.subject, " ".join(a.text), for_value=a.for_value, times=a.times)
+        elif cmd == "--armed":
+            arms = g.armed_list()
+            for e in arms:
+                until = g.datetime.fromtimestamp(e["until"]).strftime("%H:%M")
+                cc = f" cc {', '.join(e['cc'])}" if e["cc"] else ""
+                print(f"{e['id']}  to {', '.join(e['to'])}{cc}  subject \"{e['subject']}\"  text \"{e['text']}\"  "
+                      f"{e['left']} left, until {until}")
+            if not arms:
+                print("Nothing armed.")
+        elif cmd == "--disarm":
+            n = g.disarm(argv[1] if len(argv) > 1 else None)
+            print(f"Dropped {n} armed pattern{'s' if n != 1 else ''}.")
         elif cmd == "signature":
             if argv[1:] == ["--refresh"]:
                 sig = g.refresh_signature()
