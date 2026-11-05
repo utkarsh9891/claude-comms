@@ -338,13 +338,14 @@ def test_expired_sign_in_says_log_in_again(send_dir):
         g.access_token("why", post=post, unlock=lambda r: "1//r")
 
 
-def test_logout_revokes_and_deletes(tmp_path, send_dir, home):
-    fake_helper(tmp_path)
+def test_logout_deletes_without_a_scan(tmp_path, send_dir, home):
+    log = fake_helper(tmp_path)
     g.seal_token("1//r")
-    revoked = []
-    assert g.logout(post=lambda url, data, h: revoked.append(data)) == ME
-    assert revoked == [b"token=1%2F%2Fr"] and not g.signed_in()
+    assert g.logout() == ME
+    assert not g.signed_in() and not (home / "key.se").exists()
     assert "account" not in json.loads((home / "config.json").read_text())
+    assert "open|" not in log.read_text()  # the helper was never asked to unlock: no Touch ID
+    assert g.logout() is None
 
 
 def test_id_token_email_requires_verified():
@@ -495,58 +496,34 @@ def getter(msg, seen, signature=""):
     return get
 
 
-def test_reply_all_threads_and_asks_twice(send_dir, home):
+def test_reply_all_is_one_scan_that_reads_then_sends(send_dir, home):
     reply_env(home)
     c, seen, out = Calls(), [], []
     g.send([], [], None, "Thanks", [], reply_to=ORIG_ID, reply_all=True, post_raw=c.post,
            get=getter(original(), seen), token=c.token, out=out.append)
-    assert seen[0] == g.RAW_URL.format(id=ORIG_ID) and seen[1] == g.SENDAS_URL.format(email=urllib.parse.quote(ME))
-    assert len(c.reasons) == 2 and "read one email (1a1ab97a1a956b87) to prepare a reply with it quoted; nothing is sent" == c.reasons[0]
-    assert c.reasons[1].startswith('send a reply to boss@example.com, peer@example.com, lead@example.com; in the thread of "Oct report" from boss@example.com, quoting it')
+    assert c.reasons == ['send a reply to email 1a1ab97a1a956b87, to everyone on it, quoting it; text "Thanks"']
+    assert seen == [g.RAW_URL.format(id=ORIG_ID)]  # read once; no signature lookup during sends
     url, body, headers = c.posted[0]
     assert url == g.SEND_URL.replace("uploadType=media", "uploadType=multipart")
-    assert headers["Content-Type"].startswith("multipart/related; boundary=")
-    assert b'{"threadId": "t123"}' in body
-    raw = body.split(b"Content-Type: message/rfc822\r\n\r\n", 1)[1]
-    msg = email.message_from_bytes(raw, policy=email.policy.default)
-    assert msg["In-Reply-To"] == "<orig@mail.example.com>"
-    assert msg["References"] == "<root@x> <orig@mail.example.com>"
+    assert headers["Content-Type"].startswith("multipart/related; boundary=") and b'{"threadId": "t123"}' in body
+    msg = sent_message(c)
+    assert msg["In-Reply-To"] == "<orig@mail.example.com>" and msg["References"] == "<root@x> <orig@mail.example.com>"
     assert msg["Subject"] == "Re: Oct report" and msg["To"] == "boss@example.com, peer@example.com"
     assert msg["Cc"] == "lead@example.com" and ME not in msg["To"] + msg["Cc"]
-    assert any("Reply to: \"Oct report\" from boss@example.com" in line for line in out)
+    assert any('Reply to: "Oct report" from boss@example.com' in line for line in out)
     assert "review the October" not in "\n".join(out)  # someone else's text is never printed
 
 
-def test_reply_without_all_goes_to_sender_only(send_dir, home):
+def test_reply_to_sender_and_named_recipients_in_the_prompt(send_dir, home):
     reply_env(home)
     c = Calls()
     g.send([], [], None, "ok", [], reply_to=ORIG_ID, post_raw=c.post, get=getter(original(), []), token=c.token,
            out=lambda *_: None)
-    assert "send a reply to boss@example.com;" in c.reasons[1]
-
-
-def test_reply_to_header_wins_and_own_email_goes_to_its_to(send_dir, home):
-    o = g.lookup_original(ORIG_ID, "tok", get=getter(original(**{"Reply-To": "list@example.com"}), []))
-    assert g.reply_recipients(o, ME, False) == (["list@example.com"], [])
-    mine = g.lookup_original(ORIG_ID, "tok", get=getter(original(From=ME, To="a@example.com", Cc=None), []))
-    assert g.reply_recipients(mine, ME, False) == (["a@example.com"], [])
-    solo = g.lookup_original(ORIG_ID, "tok", get=getter(original(From=ME, To=ME, Cc=None), []))
-    assert g.reply_recipients(solo, ME, True) == ([ME], [])
-
-
-def test_explicit_recipients_and_subject_win(send_dir, home):
-    reply_env(home)
+    assert c.reasons[0].startswith("send a reply to email 1a1ab97a1a956b87, to its sender, quoting it")
     c = Calls()
-    g.send(["x@example.com"], ["y@example.com"], "Custom", "t", [], reply_to=ORIG_ID, reply_all=True,
-           post_raw=c.post, get=getter(original(), []), token=c.token, out=lambda *_: None)
-    raw = c.posted[0][1].split(b"Content-Type: message/rfc822\r\n\r\n", 1)[1]
-    msg = email.message_from_bytes(raw, policy=email.policy.default)
-    assert (msg["To"], msg["Cc"], msg["Subject"]) == ("x@example.com", "y@example.com", "Custom")
-    assert msg["In-Reply-To"] == "<orig@mail.example.com>"
-
-
-def test_reply_subject_keeps_existing_re():
-    assert g.reply_subject("RE: x") == "RE: x" and g.reply_subject(" x ") == "Re: x"
+    g.send(["x@example.com"], ["y@example.com"], None, "ok", [], reply_to=ORIG_ID, quote=False, post_raw=c.post,
+           get=getter(original(), []), token=c.token, out=lambda *_: None)
+    assert c.reasons[0].startswith("send a reply to email 1a1ab97a1a956b87, to x@example.com, cc y@example.com;")
 
 
 def test_draft_reply_carries_thread_in_message(send_dir, home):
@@ -556,15 +533,16 @@ def test_draft_reply_carries_thread_in_message(send_dir, home):
            token=c.token, out=lambda *_: None)
     url, body, _ = c.posted[0]
     assert url == g.DRAFT_URL.replace("uploadType=media", "uploadType=multipart")
-    assert b'{"message": {"threadId": "t123"}}' in body and c.reasons[1].startswith("save a draft reply to")
+    assert b'{"message": {"threadId": "t123"}}' in body and c.reasons[0].startswith("save a draft reply to email")
 
 
-def test_dry_run_reply_reads_headers_but_never_asks_to_send(send_dir, home):
+def test_dry_run_reply_reads_once_and_sends_nothing(send_dir, home):
     reply_env(home)
-    c = Calls()
-    g.send([], [], None, "t", [], reply_to=ORIG_ID, dry_run=True, post_raw=c.post, get=getter(original(), []),
-           token=c.token, out=lambda *_: None)
-    assert len(c.reasons) == 1 and c.posted == []
+    c, out = Calls(), []
+    g.send([], [], None, "t", [], reply_to=ORIG_ID, reply_all=True, dry_run=True, post_raw=c.post,
+           get=getter(original(), []), token=c.token, out=out.append)
+    assert c.reasons == ["read one email (1a1ab97a1a956b87) to preview a reply; nothing is sent"] and c.posted == []
+    assert any("To:       boss@example.com, peer@example.com" in line for line in out)
 
 
 def test_reply_refusals(send_dir, home):
@@ -580,19 +558,18 @@ def test_reply_refusals(send_dir, home):
     with pytest.raises(g.Refused, match="needs --reply-to"):
         g.send(["a@example.com"], [], "s", "t", [], reply_all=True, token=c.token, out=lambda *_: None)
     with pytest.raises(g.Refused, match="no Message-ID"):
-        g.send([], [], None, "t", [], reply_to=ORIG_ID, get=getter(original(**{"Message-ID": None}), []),
+        g.send([], [], None, "t", [], reply_to=ORIG_ID, quote=False, get=getter(original(**{"Message-ID": None}), []),
                token=c.token, out=lambda *_: None)
-    assert c.posted == [] and len(c.reasons) == 1  # only the header read was asked for
+    assert c.posted == [] and len(c.reasons) == 1  # only the last one got as far as the scan
 
 
-def test_original_subject_cannot_disguise_the_prompt(send_dir, home):
+def test_original_subject_cannot_inject_headers(send_dir, home):
     reply_env(home)
     c = Calls()
     g.send([], [], None, "t", [], reply_to=ORIG_ID, quote=False, post_raw=c.post,
-           get=getter(original(Subject="hi‮\nBcc: evil@x"), []), token=c.token, out=lambda *_: None)
-    assert "‮" not in c.reasons[1] and "\n" not in c.reasons[1]
-    raw = c.posted[0][1].split(b"Content-Type: message/rfc822\r\n\r\n", 1)[1]
-    assert email.message_from_bytes(raw, policy=email.policy.default)["Bcc"] is None
+           get=getter(original(Subject="hi\u202e\nBcc: evil@x"), []), token=c.token, out=lambda *_: None)
+    msg = sent_message(c)
+    assert msg["Bcc"] is None and "\u202e" not in msg["Subject"] and msg["Subject"].startswith("Re: hi")
 
 
 def test_cli_reply_parsing_puts_positionals_in_text(tmp_path, send_dir, home):
@@ -635,10 +612,10 @@ def test_no_quote_reads_headers_only_and_sends_just_your_text(send_dir, home):
     c, seen = Calls(), []
     g.send([], [], None, "Just this.", [], reply_to=ORIG_ID, quote=False, post_raw=c.post,
            get=getter(original(), seen), token=c.token, out=lambda *_: None)
-    assert seen[0].startswith(g.META_URL.format(id=ORIG_ID)) and "read the sender, recipients and subject" in c.reasons[0]
+    assert seen[0].startswith(g.META_URL.format(id=ORIG_ID))
     msg = sent_message(c)
     assert msg.get_body(("plain",)).get_content().strip() == "Just this." and msg.get_body(("html",)) is None
-    assert ", quoting it" not in c.reasons[1]
+    assert ", quoting it" not in c.reasons[0]
 
 
 def test_quote_keeps_your_html_and_quotes_a_text_only_original(tmp_path, send_dir, home):
@@ -661,48 +638,71 @@ def test_html_only_original_is_quoted_as_text_too(send_dir, home):
     assert "> Hi\r\n> there" in text and "x()" not in text
 
 
-# ---------- signature
+# ---------- signature (saved file)
 
 
-def test_signature_goes_under_your_text_and_above_the_quote(send_dir, home):
+def test_signature_from_the_file_goes_under_your_text_and_above_the_quote(send_dir, home):
     reply_env(home)
+    g.save_signature("<b>Utkarsh</b><br>Platform")
     c, out = Calls(), []
-    g.send([], [], None, "Looks good.", [], reply_to=ORIG_ID, post_raw=c.post,
-           get=getter(original(), [], signature="<b>Utkarsh</b><br>Platform"), token=c.token, out=out.append)
+    g.send([], [], None, "Looks good.", [], reply_to=ORIG_ID, post_raw=c.post, get=getter(original(), []),
+           token=c.token, out=out.append)
     msg = sent_message(c)
     text = msg.get_body(("plain",)).get_content().replace("\r\n", "\n")
     assert text.index("Looks good.") < text.index("-- \nUtkarsh\nPlatform") < text.index("wrote:")
     html = msg.get_body(("html",)).get_content()
     assert html.index("Looks good.") < html.index('class="gmail_signature"') < html.index('class="gmail_quote"')
-    assert any("Signature: your Gmail signature" in line for line in out)
+    assert any("Signature: from" in line for line in out)
 
 
-def test_plain_send_gets_the_signature_and_an_html_version(send_dir):
-    c = Calls()
-    seen = []
-    g.send(["me"], [], "s", "Hi", [], post_raw=c.post, get=getter({}, seen, signature="Utkarsh"), token=c.token,
-           out=lambda *_: None)
-    raw = c.posted[0][1]
-    msg = email.message_from_bytes(raw, policy=email.policy.default)
+def test_plain_send_uses_the_file_without_any_lookup(send_dir, home):
+    g.save_signature("Utkarsh")
+    assert stat.S_IMODE(g.signature_path().stat().st_mode) == 0o600
+    c, seen = Calls(), []
+    g.send(["me"], [], "s", "Hi", [], post_raw=c.post, get=getter({}, seen), token=c.token, out=lambda *_: None)
+    msg = email.message_from_bytes(c.posted[0][1], policy=email.policy.default)
     assert msg.get_body(("plain",)).get_content().replace("\r\n", "\n").strip() == "Hi\n\n-- \nUtkarsh"
-    assert 'class="gmail_signature"' in msg.get_body(("html",)).get_content()
-    assert seen == [g.SENDAS_URL.format(email=urllib.parse.quote(ME))]
+    assert 'class="gmail_signature"' in msg.get_body(("html",)).get_content() and seen == []
 
 
-def test_no_signature_and_missing_signature_leave_the_body_alone(send_dir):
-    for kwargs, sig in (({"signature": False}, "Utkarsh"), ({}, "")):
-        c, seen = Calls(), []
-        g.send(["me"], [], "s", "Hi", [], post_raw=c.post, get=getter({}, seen, signature=sig), token=c.token,
-               out=lambda *_: None, **kwargs)
+def test_no_signature_flag_empty_or_missing_file_leave_the_body_alone(send_dir, home):
+    for setup_sig, kwargs in (("Utkarsh", {"signature": False}), ("", {}), (None, {})):
+        if setup_sig is None:
+            g.signature_path().unlink(missing_ok=True)
+        else:
+            g.save_signature(setup_sig)
+        c = Calls()
+        g.send(["me"], [], "s", "Hi", [], post_raw=c.post, token=c.token, out=lambda *_: None, **kwargs)
         msg = email.message_from_bytes(c.posted[0][1], policy=email.policy.default)
         assert msg.get_body(("plain",)).get_content().strip() == "Hi" and msg.get_body(("html",)) is None
-        assert seen == ([] if kwargs else [g.SENDAS_URL.format(email=urllib.parse.quote(ME))])
 
 
-def test_unreadable_signature_does_not_block_the_send(send_dir):
-    def get(url, headers):
-        raise g.Refused("Google said HTTP 403")
+def test_login_saves_the_signature_without_a_scan(tmp_path, send_dir, home):
+    log = fake_helper(tmp_path)
+    browser, _ = browser_that_returns(lambda q: {"code": "c1", "state": q["state"]})
+    post, _ = token_endpoint(scope=g.COMPOSE_SCOPE + " " + g.READ_SCOPE)
+    seen = []
+    g.login(open_browser=browser, post=post, wait=20, get=getter({}, seen, signature="<i>U</i>"))
+    assert g.load_signature() == "<i>U</i>" and seen == [g.SENDAS_URL.format(email=urllib.parse.quote(ME))]
+    assert "open|" not in log.read_text()
 
-    c, out = Calls(), []
-    g.send(["me"], [], "s", "Hi", [], post_raw=c.post, get=get, token=c.token, out=out.append)
-    assert len(c.posted) == 1 and any("sending without one" in line for line in out)
+
+def test_refresh_signature_is_one_scan(send_dir, home):
+    c = Calls()
+    assert g.refresh_signature(get=getter({}, [], signature="New"), token=c.token) == "New"
+    assert g.load_signature() == "New" and c.reasons == ["read your Gmail signature to save it for gmail-send; nothing is sent"]
+
+
+# ---------- HTML from stdin
+
+
+def test_html_from_stdin_needs_no_file(tmp_path, send_dir, home):
+    env = dict(os.environ, GMAIL_SEND_HOME=str(home))
+    script = Path(g.__file__).with_name("gmail-send")
+    r = subprocess.run([sys.executable, str(script), "me", "-s", "Hi", "--html", "-", "--dry-run", "plain text"],
+                       input="<p>from stdin</p>", capture_output=True, text=True, env=env, cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert "HTML:     17 bytes" in r.stdout and "  plain text" in r.stdout
+    r = subprocess.run([sys.executable, str(script), "me", "-s", "Hi", "--html", "-", "--dry-run", "-"],
+                       input="x", capture_output=True, text=True, env=env, cwd=tmp_path)
+    assert r.returncode == 1 and "not both" in r.stderr

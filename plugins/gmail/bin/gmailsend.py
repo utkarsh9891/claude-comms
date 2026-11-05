@@ -243,7 +243,8 @@ def wait_for_redirect(server, deadline):
     return got
 
 
-def login(open_browser=webbrowser.open, post=http_json, store=seal_token, wait=600):
+def login(open_browser=webbrowser.open, post=http_json, store=seal_token, wait=600, get=None):
+    get = get or http_get_json
     client = load_client()
     helper()  # fail before the browser if the lock can't be used
     verifier = b64url(secrets.token_bytes(32))
@@ -277,6 +278,8 @@ def login(open_browser=webbrowser.open, post=http_json, store=seal_token, wait=6
         raise Refused("Google issued no lasting sign-in (refresh token); run `gmail-send login` again")
     account = id_token_email(tok.get("id_token", ""))
     store(tok["refresh_token"])
+    if READ_SCOPE in tok.get("scope", "").split():  # the fresh token can read it: no scan needed
+        save_signature(fetch_signature(account, tok["access_token"], get=get))
     cfg = load_config()
     cfg["account"] = account
     cfg["scopes"] = sorted(tok.get("scope", "").split())
@@ -299,17 +302,18 @@ def access_token(reason, post=http_json, unlock=unlock_token):
     return tok["access_token"]
 
 
-def logout(post=http_json, unlock=unlock_token):
-    """Revoke at Google (one Touch ID scan; declining still signs out here) and delete the sealed sign-in."""
+REVOKE_PAGE = "https://myaccount.google.com/connections"
+
+
+def logout():
+    """Delete the sealed sign-in and its Secure Enclave key: no scan, since nothing is sent or read. Without the
+    key the sealed copy can never be opened again. Revoking at Google too would need the sign-in (a scan), so the
+    owner does that on Google's page if they want to."""
     cfg = load_config()
     account = cfg.pop("account", None)
+    cfg.pop("scopes", None)
     if not account and not signed_in():
         return None
-    if signed_in():
-        try:
-            post(REVOKE_URL, form({"token": unlock("sign out of gmail-send and revoke its Google access")}), FORM)
-        except Refused:
-            pass  # deleting it here is what matters; revoke later at myaccount.google.com/permissions
     forget_token()
     write_private(HOME / "config.json", cfg)
     return account or "(unknown account)"
@@ -509,13 +513,46 @@ def compose(text, html, signature=None, orig=None):
 
 
 def fetch_signature(me, bearer, get=http_get_json):
-    """Your Gmail signature for this address (your own settings, read with the send's unlocked sign-in).
-    None when there is none or it can't be read; the send goes ahead without it."""
+    """Your Gmail signature for this address, from your own send-as settings. None when there is none or it can't
+    be read."""
     try:
         r = get(SENDAS_URL.format(email=urllib.parse.quote(me)), {"Authorization": f"Bearer {bearer}"})
     except Refused:
         return None
     return (r.get("signature") or "").strip() or None
+
+
+def signature_path():
+    return HOME / "signature.html"
+
+
+def save_signature(sig):
+    """Keep the signature in ~/.gmail-send/signature.html (0600), used by every email; edit it freely. An empty
+    file means no signature."""
+    ensure_home()
+    path = signature_path()
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(sig or "")
+    return path
+
+
+def load_signature():
+    try:
+        return signature_path().read_text().strip() or None
+    except FileNotFoundError:
+        return None
+
+
+def refresh_signature(get=None, token=None):
+    """Fetch Gmail's signature again into the file (one scan)."""
+    me = load_config().get("account")
+    if not me:
+        raise Refused("not signed in: run `gmail-send login`")
+    bearer = (token or access_token)("read your Gmail signature to save it for gmail-send; nothing is sent")
+    sig = fetch_signature(me, bearer, get=get or http_get_json)
+    save_signature(sig)
+    return sig
 
 
 def reply_recipients(orig, me, reply_all):
@@ -538,6 +575,25 @@ def reply_recipients(orig, me, reply_all):
 def reply_subject(original):
     s = clean(original, 900)  # someone else's text: no line breaks, control or bidi characters
     return s if s[:3].lower() == "re:" else f"Re: {s}"
+
+
+def reply_reason(msg_id, reply_all, to_values, cc_values, attachments, text, html, quote, draft, dry_run):
+    """The one prompt for a reply, shown before the original is read: names the email and who it goes to, or the
+    rule that picks them (`--dry-run` lists them by name)."""
+    if dry_run:
+        return f"read one email ({msg_id}) to preview a reply; nothing is sent"
+    who = ("everyone on it" if reply_all else "its sender") if not to_values else ", ".join(to_values)
+    if cc_values:
+        who += ", cc " + ", ".join(cc_values)
+    parts = [("save a draft reply" if draft else "send a reply") + f" to email {msg_id}, to {who}"
+             + (", quoting it" if quote else "")]
+    if attachments:
+        parts.append("attaching " + ", ".join(f"{clean(n, 60)} ({human(len(d))})" for n, d in attachments))
+    if text:
+        parts.append(f'text "{clean(text, 150)}"')
+    if html:
+        parts.append(f"with an HTML version ({human(len(html.encode()))})")
+    return "; ".join(parts)
 
 
 def approval_reason(recipients, subject, attachments, text, html=None, me=None, draft=False, reply=None):
@@ -577,7 +633,7 @@ def summary(me, to, cc, subject, attachments, text, html, reply=None, quoting=Fa
     if html:
         lines.append(f"HTML:     {human(len(html.encode()))} (sent with the text below as its plain version)")
     if signature:
-        lines.append("Signature: your Gmail signature, added when sending (--no-signature to leave it out)")
+        lines.append(f"Signature: from {signature_path()} (--no-signature to leave it out)")
     lines.append("Text:")
     lines += ["  " + line for line in (text or "(empty)").splitlines()] or ["  (empty)"]
     return "\n".join(lines)
@@ -585,7 +641,8 @@ def summary(me, to, cc, subject, attachments, text, html, reply=None, quoting=Fa
 
 def send(to_values, cc_values, subject, text, files, html_file=None, dry_run=False, draft=False,
          reply_to=None, reply_all=False, quote=True, signature=True, post_raw=None, get=None,
-         token=access_token, out=print):
+         token=access_token, out=print, html_text=None):
+    """One Touch ID scan per send, draft or reply. The scan unlocks the sign-in and is the approval."""
     get = get or http_get_json
     cfg = load_config()
     me = cfg.get("account")
@@ -593,8 +650,11 @@ def send(to_values, cc_values, subject, text, files, html_file=None, dry_run=Fal
         raise Refused("not signed in: run `gmail-send login`")
     roots = send_from_roots(cfg)
     attachments = load_attachments(files, roots)  # refuse a bad file before any scan
-    html = sendable(html_file, roots).read_text() if html_file else None
-    reply = None
+    html = html_text if html_text is not None else (sendable(html_file, roots).read_text() if html_file else None)
+    sig = load_signature() if signature else None
+    to_given = parse_recipients(to_values, me) if to_values else []
+    cc_given = parse_recipients(cc_values, me) if cc_values else []
+    reply, bearer = None, None
     if reply_to:
         scopes = cfg.get("scopes", [])
         if quote and READ_SCOPE not in scopes:
@@ -604,49 +664,38 @@ def send(to_values, cc_values, subject, text, files, html_file=None, dry_run=Fal
             raise Refused("replying needs permission to read the original: run `gmail-send login` again")
         if not GMAIL_ID.match(reply_to):
             raise Refused(f"not a Gmail message id: {reply_to!r}")
-        what = "read one email" if quote else "read the sender, recipients and subject of one email"
-        out(f"Asking for Touch ID to {what} ({reply_to}) to prepare the reply…")
-        reply = lookup_original(reply_to, token(f"{what} ({reply_to}) to prepare a reply"
-                                                 f"{' with it quoted' if quote else ''}; nothing is sent"),
-                                get=get, quote=quote)
+        out("Asking for Touch ID…")
+        bearer = token(reply_reason(reply_to, reply_all, to_given, cc_given, attachments, text, html, quote,
+                                    draft, dry_run))
+        reply = lookup_original(reply_to, bearer, get=get, quote=quote)
         to_d, cc_d = reply_recipients(reply, me, reply_all)
-        to = parse_recipients(to_values, me) if to_values else to_d
-        cc = parse_recipients(cc_values, me) if cc_values else cc_d
+        to, cc = to_given or to_d, cc_given if cc_values else cc_d
         subject = subject or reply_subject(reply["subject"])
     else:
         if reply_all:
             raise Refused("--all needs --reply-to <message id>")
-        to = parse_recipients(to_values, me)
-        cc = parse_recipients(cc_values, me)
+        to, cc = to_given, cc_given
     cc = [a for a in cc if a.lower() not in (t.lower() for t in to)]
     if not to:
         raise Refused("no recipient")
     if not (subject or "").strip():
         raise Refused("a subject is required (-s)")
     quoting = bool(reply and quote)
-    out(summary(me, to, cc, subject, attachments, text, html, reply, quoting, signature))
-
-    def build(sig):
-        body_text, body_html = compose(text, html, sig, reply if quoting else None)
-        try:
-            return build_message(me, to, cc, subject, body_text, attachments, body_html,
-                                 in_reply_to=reply and reply["message_id"], references=reply and reply["references"])
-        except ValueError as e:  # e.g. a line break in a header: never sent as written
-            raise Refused(f"can't build the email: {e}") from None
-
-    build(None)  # refuse a message that can't be built before asking for any scan
+    body_text, body_html = compose(text, html, sig, reply if quoting else None)
+    try:
+        raw = build_message(me, to, cc, subject, body_text, attachments, body_html,
+                            in_reply_to=reply and reply["message_id"], references=reply and reply["references"])
+    except ValueError as e:  # e.g. a line break in a header: never sent as written
+        raise Refused(f"can't build the email: {e}") from None
+    out(summary(me, to, cc, subject, attachments, text, html, reply, quoting, bool(sig)))
     if dry_run:
         out("Dry run: nothing sent or saved.")
         return None
+    if bearer is None:
+        out("Asking for Touch ID…")
+        bearer = token(approval_reason(to + cc, subject, attachments, text, html, me=me, draft=draft))
     poster = post_raw or http_json
-    reason = approval_reason(to + cc, subject, attachments, text, html, me=me, draft=draft, reply=reply)
-    out("Asking for Touch ID…")
-    bearer = token(reason)  # the scan that unlocks the sign-in is the approval; declining raises Refused
     auth = {"Authorization": f"Bearer {bearer}"}
-    sig = fetch_signature(me, bearer, get=get) if signature else None
-    if signature and sig is None:
-        out("No Gmail signature found (or it can't be read with this sign-in); sending without one.")
-    raw = build(sig)
     if reply:
         meta = {"message": {"threadId": reply["thread"]}} if draft else {"threadId": reply["thread"]}
         body, ctype = multipart(meta, raw)
@@ -658,8 +707,7 @@ def send(to_values, cc_values, subject, text, files, html_file=None, dry_run=Fal
         out(f"Draft saved: {res.get('id')}. Check and send it from Gmail Drafts: "
             f"https://mail.google.com/mail/?authuser={urllib.parse.quote(me)}#drafts")
         return res
-    thread = res.get("threadId")
-    out(f"Sent: message {res.get('id')}" + (f" in thread {thread}" if reply else "") +
+    out(f"Sent: message {res.get('id')}" + (f" in thread {res.get('threadId')}" if reply else "") +
         f" ({', '.join(res.get('labelIds') or [])})")
     return res
 
@@ -672,4 +720,7 @@ def status():
     lines.append(f"signed in: {account + ' (locked to Touch ID)' if account and signed_in() else 'no (gmail-send login)'}")
     lines.append(f"approval:  {'Touch ID on every send and draft' if os.access(approver_path(), os.X_OK) else 'helper missing: nothing can be sent (/gmail-setup)'}")
     lines.append("send from: " + ", ".join(cfg.get("send_from", DEFAULT_SEND_FROM)))
+    sig = load_signature()
+    lines.append(f"signature: {signature_path()} ({human(len(sig.encode()))})" if sig else
+                 f"signature: none ({signature_path()} is missing or empty; gmail-send signature --refresh)")
     return "\n".join(lines)
