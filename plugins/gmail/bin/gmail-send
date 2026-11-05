@@ -4,7 +4,7 @@
 # ///
 """Send mail with local attachments from any terminal, through the Gmail API.
 
-  gmail-send <to>[,<to>…] -s "<subject>" [--cc <addr>[,…]] [--file <path>]… [--html <file>] [--draft] [text… | -]
+  gmail-send <to>[,<to>…] -s "<subject>" [--cc <addr>[,…]] [--file <path>]… [--html <file>] [--draft] [--no-signature] [text… | -]
   gmail-send --reply-to <message id> [--all] [--no-quote] [--to …] [--cc …] [-s …] [--file …] [--html …] [--draft] [text… | -]
   gmail-send setup <client_secret….json>   store your Desktop-app OAuth client (once per machine)
   gmail-send login                         sign in to Google (send, drafts; read an email only to reply to it)
@@ -20,6 +20,7 @@ ID scan (the quoted text is never printed), then asks again to send.
 arguments, or stdin with "-". --html adds an HTML version read from a file (the text stays as the plain
 version; it comes from the same folders as attachments). --draft saves it to Gmail
 Drafts instead of sending (check and send it from Gmail). --dry-run prints what would be sent and stops.
+Your Gmail signature is added under your text (above any quote), as Gmail does, unless --no-signature.
 
 Every send and every draft, to anyone including yourself, waits for your Touch ID ("Gmail for Claude"), naming
 every recipient, the subject, each attachment and the start of the text: the Google sign-in is stored only
@@ -49,6 +50,7 @@ def send_args(argv):
     p.add_argument("--file", action="append", default=[])
     p.add_argument("--html")
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--no-signature", action="store_true")
     p.add_argument("--draft", action="store_true")
     p.add_argument("text", nargs="*")
     return p.parse_intermixed_args(argv)  # text may follow the options
@@ -78,7 +80,7 @@ def main(argv):
             to = a.to if isinstance(a.to, list) else [a.to]
             g.send(to, a.cc, a.subject, text, a.file, html_file=a.html, dry_run=a.dry_run, draft=a.draft,
                    reply_to=getattr(a, "reply_to", None), reply_all=a.all,
-                   quote=not getattr(a, "no_quote", False))
+                   quote=not getattr(a, "no_quote", False), signature=not a.no_signature)
     except g.Refused as e:
         print(f"gmail-send: {e}", file=sys.stderr)
         return 1

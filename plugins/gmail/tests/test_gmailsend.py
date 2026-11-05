@@ -24,6 +24,25 @@ import gmailsend as g  # noqa: E402
 ME = "owner@example.com"
 
 
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch):
+    """Tests never reach Google: real HTTP fails the test (the loopback sign-in server is allowed), and the
+    default Gmail lookup behaves as if the signature can't be read."""
+    real = urllib.request.urlopen
+
+    def guarded(req, *a, **k):
+        url = getattr(req, "full_url", req)
+        if not str(url).startswith("http://127.0.0.1:"):
+            raise AssertionError(f"test tried to reach the network: {url}")
+        return real(req, *a, **k)
+
+    def offline(url, headers):
+        raise g.Refused("no network in tests")
+
+    monkeypatch.setattr(urllib.request, "urlopen", guarded)
+    monkeypatch.setattr(g, "http_get_json", offline)
+
+
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     h = tmp_path / "gmail-home"
@@ -469,10 +488,10 @@ def reply_env(home, scopes=(g.COMPOSE_SCOPE, g.READ_SCOPE)):
     g.write_private(home / "config.json", cfg)
 
 
-def getter(msg, seen):
+def getter(msg, seen, signature=""):
     def get(url, headers):
         seen.append(url)
-        return msg
+        return {"signature": signature} if "/settings/sendAs/" in url else msg
     return get
 
 
@@ -481,7 +500,7 @@ def test_reply_all_threads_and_asks_twice(send_dir, home):
     c, seen, out = Calls(), [], []
     g.send([], [], None, "Thanks", [], reply_to=ORIG_ID, reply_all=True, post_raw=c.post,
            get=getter(original(), seen), token=c.token, out=out.append)
-    assert seen == [g.RAW_URL.format(id=ORIG_ID)]
+    assert seen[0] == g.RAW_URL.format(id=ORIG_ID) and seen[1] == g.SENDAS_URL.format(email=urllib.parse.quote(ME))
     assert len(c.reasons) == 2 and "read one email (1a1ab97a1a956b87) to prepare a reply with it quoted; nothing is sent" == c.reasons[0]
     assert c.reasons[1].startswith('send a reply to boss@example.com, peer@example.com, lead@example.com; in the thread of "Oct report" from boss@example.com, quoting it')
     url, body, headers = c.posted[0]
@@ -640,3 +659,50 @@ def test_html_only_original_is_quoted_as_text_too(send_dir, home):
            out=lambda *_: None)
     text = sent_message(c).get_body(("plain",)).get_content()
     assert "> Hi\r\n> there" in text and "x()" not in text
+
+
+# ---------- signature
+
+
+def test_signature_goes_under_your_text_and_above_the_quote(send_dir, home):
+    reply_env(home)
+    c, out = Calls(), []
+    g.send([], [], None, "Looks good.", [], reply_to=ORIG_ID, post_raw=c.post,
+           get=getter(original(), [], signature="<b>Utkarsh</b><br>Platform"), token=c.token, out=out.append)
+    msg = sent_message(c)
+    text = msg.get_body(("plain",)).get_content().replace("\r\n", "\n")
+    assert text.index("Looks good.") < text.index("-- \nUtkarsh\nPlatform") < text.index("wrote:")
+    html = msg.get_body(("html",)).get_content()
+    assert html.index("Looks good.") < html.index('class="gmail_signature"') < html.index('class="gmail_quote"')
+    assert any("Signature: your Gmail signature" in line for line in out)
+
+
+def test_plain_send_gets_the_signature_and_an_html_version(send_dir):
+    c = Calls()
+    seen = []
+    g.send(["me"], [], "s", "Hi", [], post_raw=c.post, get=getter({}, seen, signature="Utkarsh"), token=c.token,
+           out=lambda *_: None)
+    raw = c.posted[0][1]
+    msg = email.message_from_bytes(raw, policy=email.policy.default)
+    assert msg.get_body(("plain",)).get_content().replace("\r\n", "\n").strip() == "Hi\n\n-- \nUtkarsh"
+    assert 'class="gmail_signature"' in msg.get_body(("html",)).get_content()
+    assert seen == [g.SENDAS_URL.format(email=urllib.parse.quote(ME))]
+
+
+def test_no_signature_and_missing_signature_leave_the_body_alone(send_dir):
+    for kwargs, sig in (({"signature": False}, "Utkarsh"), ({}, "")):
+        c, seen = Calls(), []
+        g.send(["me"], [], "s", "Hi", [], post_raw=c.post, get=getter({}, seen, signature=sig), token=c.token,
+               out=lambda *_: None, **kwargs)
+        msg = email.message_from_bytes(c.posted[0][1], policy=email.policy.default)
+        assert msg.get_body(("plain",)).get_content().strip() == "Hi" and msg.get_body(("html",)) is None
+        assert seen == ([] if kwargs else [g.SENDAS_URL.format(email=urllib.parse.quote(ME))])
+
+
+def test_unreadable_signature_does_not_block_the_send(send_dir):
+    def get(url, headers):
+        raise g.Refused("Google said HTTP 403")
+
+    c, out = Calls(), []
+    g.send(["me"], [], "s", "Hi", [], post_raw=c.post, get=get, token=c.token, out=out.append)
+    assert len(c.posted) == 1 and any("sending without one" in line for line in out)

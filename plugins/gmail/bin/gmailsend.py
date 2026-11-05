@@ -44,6 +44,7 @@ SEND_URL = "https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?
 DRAFT_URL = "https://gmail.googleapis.com/upload/gmail/v1/users/me/drafts?uploadType=media"
 META_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/{id}?format=metadata"
 RAW_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/{id}?format=raw"
+SENDAS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs/{email}"
 REPLY_HEADERS = ("Message-ID", "References", "Subject", "From", "Reply-To", "To", "Cc")
 GMAIL_ID = re.compile(r"^[0-9a-f]{10,24}$")
 MAX_ATTACH = 25 * 1024 * 1024
@@ -484,19 +485,37 @@ def quote_line(orig):
     return f"On {stamp}, {orig['from_display'] or 'the sender'} wrote:"
 
 
-def with_quote(text, html, orig):
-    """The reply's text and HTML with the original quoted below, as Gmail does (its gmail_quote markup lets
-    Gmail fold it behind "•••")."""
-    line = quote_line(orig)
-    quoted_text = orig["text"] or ""
-    text_out = (text or "").rstrip() + "\n\n" + line + "\n" + "\n".join(
-        ">" + (" " + q if q else "") for q in quoted_text.splitlines())
-    mine = html if html else "<div dir=\"ltr\">" + htmllib.escape(text or "").replace("\n", "<br>") + "</div>"
-    theirs = orig["html"] if orig["html"] else htmllib.escape(quoted_text).replace("\n", "<br>")
-    html_out = (f"{mine}<br><div class=\"gmail_quote\"><div dir=\"ltr\" class=\"gmail_attr\">{htmllib.escape(line)}"
-                f"<br></div><blockquote class=\"gmail_quote\" style=\"margin:0px 0px 0px 0.8ex;border-left:1px solid "
-                f"rgb(204,204,204);padding-left:1ex\">{theirs}</blockquote></div>")
+def compose(text, html, signature=None, orig=None):
+    """The body as Gmail writes it: your text, then your signature ("-- " and it), then the original quoted with
+    "On … wrote:" (Gmail's gmail_quote markup folds it behind "•••"). Without a signature or a quote the body is
+    left exactly as given."""
+    if not signature and not orig:
+        return text, html
+    text_out = (text or "").rstrip()
+    html_out = html if html else '<div dir="ltr">' + htmllib.escape(text or "").replace("\n", "<br>") + "</div>"
+    if signature:
+        text_out += "\n\n-- \n" + html_to_text(signature)
+        html_out += ('<br><span class="gmail_signature_prefix">-- </span><br>'
+                     f'<div dir="ltr" class="gmail_signature" data-smartmail="gmail_signature">{signature}</div>')
+    if orig:
+        line = quote_line(orig)
+        quoted_text = orig["text"] or ""
+        text_out += "\n\n" + line + "\n" + "\n".join(">" + (" " + q if q else "") for q in quoted_text.splitlines())
+        theirs = orig["html"] if orig["html"] else htmllib.escape(quoted_text).replace("\n", "<br>")
+        html_out += (f'<br><div class="gmail_quote"><div dir="ltr" class="gmail_attr">{htmllib.escape(line)}'
+                     '<br></div><blockquote class="gmail_quote" style="margin:0px 0px 0px 0.8ex;border-left:1px solid '
+                     f'rgb(204,204,204);padding-left:1ex">{theirs}</blockquote></div>')
     return text_out, html_out
+
+
+def fetch_signature(me, bearer, get=http_get_json):
+    """Your Gmail signature for this address (your own settings, read with the send's unlocked sign-in).
+    None when there is none or it can't be read; the send goes ahead without it."""
+    try:
+        r = get(SENDAS_URL.format(email=urllib.parse.quote(me)), {"Authorization": f"Bearer {bearer}"})
+    except Refused:
+        return None
+    return (r.get("signature") or "").strip() or None
 
 
 def reply_recipients(orig, me, reply_all):
@@ -540,7 +559,7 @@ def approval_reason(recipients, subject, attachments, text, html=None, me=None, 
     return "; ".join(parts)
 
 
-def summary(me, to, cc, subject, attachments, text, html, reply=None, quoting=False):
+def summary(me, to, cc, subject, attachments, text, html, reply=None, quoting=False, signature=False):
     lines = [f"From:     {me}"]
     if reply:
         lines.append(f"Reply to: \"{clean(reply['subject'], 100)}\" from {', '.join(reply['from'])} "
@@ -557,14 +576,17 @@ def summary(me, to, cc, subject, attachments, text, html, reply=None, quoting=Fa
         lines.append(f"Attach:   {name}  {human(len(data))}  sha256 {hashlib.sha256(data).hexdigest()}")
     if html:
         lines.append(f"HTML:     {human(len(html.encode()))} (sent with the text below as its plain version)")
+    if signature:
+        lines.append("Signature: your Gmail signature, added when sending (--no-signature to leave it out)")
     lines.append("Text:")
     lines += ["  " + line for line in (text or "(empty)").splitlines()] or ["  (empty)"]
     return "\n".join(lines)
 
 
 def send(to_values, cc_values, subject, text, files, html_file=None, dry_run=False, draft=False,
-         reply_to=None, reply_all=False, quote=True, post_raw=None, get=http_get_json, token=access_token,
-         out=print):
+         reply_to=None, reply_all=False, quote=True, signature=True, post_raw=None, get=None,
+         token=access_token, out=print):
+    get = get or http_get_json
     cfg = load_config()
     me = cfg.get("account")
     if not me:
@@ -602,13 +624,17 @@ def send(to_values, cc_values, subject, text, files, html_file=None, dry_run=Fal
     if not (subject or "").strip():
         raise Refused("a subject is required (-s)")
     quoting = bool(reply and quote)
-    out(summary(me, to, cc, subject, attachments, text, html, reply, quoting))
-    body_text, body_html = with_quote(text, html, reply) if quoting else (text, html)
-    try:
-        raw = build_message(me, to, cc, subject, body_text, attachments, body_html,
-                            in_reply_to=reply and reply["message_id"], references=reply and reply["references"])
-    except ValueError as e:  # e.g. a line break in a header: never sent as written
-        raise Refused(f"can't build the email: {e}") from None
+    out(summary(me, to, cc, subject, attachments, text, html, reply, quoting, signature))
+
+    def build(sig):
+        body_text, body_html = compose(text, html, sig, reply if quoting else None)
+        try:
+            return build_message(me, to, cc, subject, body_text, attachments, body_html,
+                                 in_reply_to=reply and reply["message_id"], references=reply and reply["references"])
+        except ValueError as e:  # e.g. a line break in a header: never sent as written
+            raise Refused(f"can't build the email: {e}") from None
+
+    build(None)  # refuse a message that can't be built before asking for any scan
     if dry_run:
         out("Dry run: nothing sent or saved.")
         return None
@@ -617,6 +643,10 @@ def send(to_values, cc_values, subject, text, files, html_file=None, dry_run=Fal
     out("Asking for Touch ID…")
     bearer = token(reason)  # the scan that unlocks the sign-in is the approval; declining raises Refused
     auth = {"Authorization": f"Bearer {bearer}"}
+    sig = fetch_signature(me, bearer, get=get) if signature else None
+    if signature and sig is None:
+        out("No Gmail signature found (or it can't be read with this sign-in); sending without one.")
+    raw = build(sig)
     if reply:
         meta = {"message": {"threadId": reply["thread"]}} if draft else {"threadId": reply["thread"]}
         body, ctype = multipart(meta, raw)
