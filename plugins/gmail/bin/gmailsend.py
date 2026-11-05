@@ -550,7 +550,8 @@ def summary(me, to, cc, subject, attachments, text, html, reply=None, quoting=Fa
         lines.append(f"Cc:       {', '.join(cc)}")
     lines.append(f"Subject:  {subject}")
     if quoting:  # the quoted text is someone else's: counted, never printed
-        lines.append(f"Quoting:  the original below your text ({len((reply['text'] or '').splitlines())} lines; "
+        n = len((reply["text"] or "").splitlines())
+        lines.append(f"Quoting:  the original below your text ({n} line{'' if n == 1 else 's'}; "
                      f"not shown here; --no-quote to leave it out)")
     for name, data in attachments:
         lines.append(f"Attach:   {name}  {human(len(data))}  sha256 {hashlib.sha256(data).hexdigest()}")
