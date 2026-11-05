@@ -5,7 +5,9 @@ something lives, the answer is here or one hop away. [`CLAUDE.md`](./CLAUDE.md),
 and every other agent or IDE entry point point here. Reachability is enforced in CI by
 [`scripts/check-docs.py`](./scripts/check-docs.py).
 
-**whatsapp-claude** lets you read, triage and reply to WhatsApp from Claude Code. A local **bridge**
+**claude-comms** holds Claude Code plugins for messaging channels, one plugin per channel
+([ADR 2d0dd3](./docs/architecture/decisions/2026-11-05-2d0dd3-rename-repo-to-claude-comms.md)). Today it has one:
+the **whatsapp** plugin lets you read, triage and reply to WhatsApp from Claude Code. A local **bridge**
 links your WhatsApp account as a linked device and stores the chats you allowlist; an **MCP server** exposes them
 as tools; a **Claude Code plugin** packages both behind a dedicated session and a guard that keeps the tools out
 of permission-bypass mode. Message text is untrusted input from other people, and the whole design follows from

@@ -1,5 +1,5 @@
 {
-  "name": "whatsapp-claude",
+  "name": "claude-comms",
   "owner": {
     "name": "Utkarsh Upadhyay"
   },
@@ -11,6 +11,6 @@
     }
   ],
   "metadata": {
-    "description": "WhatsApp for Claude Code: allowlisted chats, a dedicated session, and a hard block on bypass mode."
+    "description": "Claude Code plugins for messaging channels, one per channel. WhatsApp: allowlisted chats, a dedicated session, and a hard block on bypass mode."
   }
 }
