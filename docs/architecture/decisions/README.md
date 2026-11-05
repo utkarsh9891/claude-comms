@@ -42,4 +42,5 @@ agent) knows *why* this repo is the way it is and *when* a decision should be re
 | [2026-11-05-d38d84](./2026-11-05-d38d84-gmail-send-through-the-gmail-api.md) | Gmail channel: `gmail-send` through the Gmail API, every send behind Touch ID | gmail | amended by 847f76, c41e0b |
 | [2026-11-05-847f76](./2026-11-05-847f76-gmail-replies-read-headers-behind-their-own-scan.md) | Gmail replies in a thread, quoting the original, in one Touch ID scan | gmail | accepted |
 | [2026-11-05-a5657a](./2026-11-05-a5657a-owner-only-merge-no-required-review.md) | Only the owner merges to `main`; no approving review required | repo | accepted |
-| [2026-11-05-c41e0b](./2026-11-05-c41e0b-gmail-armed-sends-one-hour-key.md) | Gmail armed sends: approve a pattern with one scan, send matching mail for up to an hour | gmail | accepted |
+| [2026-11-05-c41e0b](./2026-11-05-c41e0b-gmail-armed-sends-one-hour-key.md) | Gmail armed sends: approve a pattern with one scan, send matching mail for up to an hour | gmail | amended by 886b10 |
+| [2026-11-05-886b10](./2026-11-05-886b10-gmail-armed-replies.md) | Gmail armed replies: read the email at arming, store the reply's context with the send-only key (designed, not built yet) | gmail | accepted |

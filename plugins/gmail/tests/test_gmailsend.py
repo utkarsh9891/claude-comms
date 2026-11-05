@@ -863,6 +863,6 @@ def test_access_key_refuses_a_broader_key_than_asked(send_dir, granted, ok):
 
 
 def test_signature_plain_text_has_no_stray_blank_lines():
-    sig = '<div dir="ltr">Regards,<div>Utkarsh Upadhyay<br></div><div>+91-00000-00000</div><div>Role - Team</div></div>'
-    assert g.html_to_text(sig) == "Regards,\nUtkarsh Upadhyay\n+91-00000-00000\nRole - Team"
+    sig = '<div dir="ltr">Regards,<div>Asha Example<br></div><div>+00-00000-00000</div><div>Role - Team</div></div>'
+    assert g.html_to_text(sig) == "Regards,\nAsha Example\n+00-00000-00000\nRole - Team"
     assert g.html_to_text("a<br><br>b") == "a\n\nb"  # a deliberate blank line stays
