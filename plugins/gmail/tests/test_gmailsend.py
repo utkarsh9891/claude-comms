@@ -489,6 +489,8 @@ def test_reply_to_header_wins_and_own_email_goes_to_its_to(send_dir, home):
     assert g.reply_recipients(o, ME, False) == (["list@example.com"], [])
     mine = g.lookup_original(ORIG_ID, "tok", get=getter(original(From=ME, To="a@example.com", Cc=None), []))
     assert g.reply_recipients(mine, ME, False) == (["a@example.com"], [])
+    solo = g.lookup_original(ORIG_ID, "tok", get=getter(original(From=ME, To=ME, Cc=None), []))
+    assert g.reply_recipients(solo, ME, True) == ([ME], [])
 
 
 def test_explicit_recipients_and_subject_win(send_dir, home):

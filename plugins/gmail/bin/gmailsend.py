@@ -417,7 +417,7 @@ def lookup_original(msg_id, bearer, get=http_get_json):
 
 def reply_recipients(orig, me, reply_all):
     """Gmail's rules: answer Reply-To (else From); a reply to your own email goes to its To; reply-all adds the
-    original To and Cc. You are never a recipient of your own reply."""
+    original To and Cc. You are left out, unless nobody else is on it."""
     mine = lambda a: a.lower() == me.lower()  # noqa: E731
     target = orig["reply_to"] or orig["from"]
     if all(mine(a) for a in target):
@@ -428,7 +428,7 @@ def reply_recipients(orig, me, reply_all):
         cc = list(orig["cc"])
     dedupe = lambda xs, skip=(): [a for i, a in enumerate(xs) if not mine(a) and a.lower() not in  # noqa: E731
                                   {x.lower() for x in xs[:i]} | {s.lower() for s in skip}]
-    to = dedupe(to)
+    to = dedupe(to) or [me]  # a thread only with yourself: the reply goes to you
     return to, dedupe(cc, skip=to)
 
 

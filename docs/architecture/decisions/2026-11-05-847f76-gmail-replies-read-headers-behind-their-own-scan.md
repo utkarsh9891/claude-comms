@@ -21,7 +21,7 @@ calling session doesn't have to dig headers out of another tool.
   subject and sender. Two scans per reply: the recipients of a reply-all aren't known until the headers are read,
   and the send prompt must name every recipient.
 - Recipients follow Gmail: Reply-To, else From; a reply to your own email goes to its To; `--all` adds the
-  original To and Cc; the owner is never a recipient. `--to`/`--cc` replace them; `-s` replaces "Re: <subject>".
+  original To and Cc; the owner is left out unless nobody else is on the thread. `--to`/`--cc` replace them; `-s` replaces "Re: <subject>".
 - The message carries `In-Reply-To` and `References`, and goes up with the thread id (multipart upload).
 - Header text from the original is someone else's: line breaks, control and bidi characters are removed before it
   is reused in a subject or shown in a prompt.
