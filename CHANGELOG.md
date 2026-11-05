@@ -3,6 +3,11 @@
 Notable changes per plugin version (`plugins/<plugin>/.claude-plugin/plugin.json`); unprefixed headings are the
 `whatsapp` plugin. Back to [AGENTS.md](./AGENTS.md).
 
+## gmail 0.3.1 — 2026-11-05
+
+- The plain-text version of a signature (and of a quoted HTML-only email) no longer gets a stray blank line
+  where a line break is followed by a new block.
+
 ## gmail 0.3.0 — 2026-11-05
 
 - **Armed sends:** `gmail-send --arm <to> -s "<subject pattern>" [--times N] [--for 45m] "<text pattern>"` approves,

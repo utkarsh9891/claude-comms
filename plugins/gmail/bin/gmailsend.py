@@ -432,8 +432,12 @@ class _Text(HTMLParser):
     def handle_starttag(self, tag, attrs):
         if tag in ("script", "style"):
             self.skip += 1
-        elif tag in ("br", "p", "div", "tr", "li", "h1", "h2", "h3", "blockquote"):
+        elif tag == "br":
             self.out.append("\n")
+        elif tag in ("p", "div", "tr", "li", "h1", "h2", "h3", "blockquote"):
+            # a block starts a new line, but not a second one right after a <br> or another block
+            if self.out and not "".join(self.out[-2:]).endswith("\n"):
+                self.out.append("\n")
 
     def handle_endtag(self, tag):
         if tag in ("script", "style") and self.skip:
