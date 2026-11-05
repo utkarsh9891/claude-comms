@@ -1,6 +1,6 @@
 # 2026-11-05-c41e0b — Gmail armed sends: approve a pattern with one scan, send matching mail for up to an hour
 
-- **Status:** accepted
+- **Status:** amended by 886b10
 - **Date:** 2026-11-05
 - **Deciders:** Utkarsh Upadhyay
 - **Scope:** gmail

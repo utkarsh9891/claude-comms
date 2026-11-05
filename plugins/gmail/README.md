@@ -50,7 +50,8 @@ gmail-send --armed                                                              
 One scan approves up to `--times` emails (default 1, at most 20) to exactly those recipients whose whole subject
 and text fit the patterns, within `--for` (default and at most 1 hour: Google's key lifetime). Slots: `{num}`,
 `{id}` (ticket, PR, branch, SHA), `{url}` (one https link), `{text}` (a line up to 100 characters); `{{ }}` are
-literal braces. Files, HTML, drafts and replies always ask. While armed, the one-hour key, limited to
+literal braces. Files, HTML, drafts and replies always ask (armed replies are designed, not built yet:
+[ADR 886b10](../../docs/architecture/decisions/2026-11-05-886b10-gmail-armed-replies.md)). While armed, the one-hour key, limited to
 sending and drafts (it can't read your inbox), sits in `~/.gmail-send/armed.json` (0600) ([ADR c41e0b](../../docs/architecture/decisions/2026-11-05-c41e0b-gmail-armed-sends-one-hour-key.md)).
 
 **Your signature** lives in `~/.gmail-send/signature.html`: saved from Gmail when you sign in, editable, and
