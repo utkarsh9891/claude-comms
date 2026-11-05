@@ -1,6 +1,6 @@
 # 2026-10-23-aa4dba — Public repo; `main` changes only by reviewed PR with merge commits
 
-- **Status:** accepted
+- **Status:** amended by a5657a
 - **Date:** 2026-10-23
 - **Deciders:** Utkarsh Upadhyay
 - **Scope:** repo

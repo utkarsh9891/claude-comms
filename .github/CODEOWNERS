@@ -1,4 +1,5 @@
-# Every change needs the owner's review (enforced by the main ruleset).
+# The owner of every file: GitHub asks them for review. Not a merge gate (ADR 2026-11-05-a5657a); only the owner
+# has write access, so only the owner merges.
 * @utkarsh9891
 
 # Security boundary: allowlist, API token, outbox, path sanitising
