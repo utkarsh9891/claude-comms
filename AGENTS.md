@@ -43,6 +43,8 @@ that.
   | `gmail` | [`plugins/gmail/`](./plugins/gmail/README.md) | [`module.yaml`](./plugins/gmail/module.yaml) | Claude Code plugin: `gmail-send`, the Gmail for Claude Touch ID lock, `/gmail-setup`, installer |
 
 - **Using it**
+  - [Set up Gmail for Claude on a Mac](./docs/guides/gmail-setup-with-claude.md) — the whole setup, written to hand to
+    Claude: plugin, connector and deny rules, the OAuth client step by step, sign-in, signature, test
   - [Gmail: the connector reads, `gmail-send` sends](./docs/guides/gmail-connector-and-gmail-send.md) — how the two
     tools work together, their access controls (deny rules, Touch ID) and the setup cost
   - [Gmail: `gmail-send`](./plugins/gmail/README.md) — set up, send, drafts, replies, attachments, the Touch ID lock

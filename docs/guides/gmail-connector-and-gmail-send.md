@@ -64,8 +64,10 @@ attachments and `--html` files only from the send folders.
 ## Setting it up (and what it costs)
 
 - **Connector:** `/mcp` → claude.ai Gmail → sign in. Add the deny rules above.
-- **`gmail-send`:** install the `gmail` plugin and follow its [README](../../plugins/gmail/README.md): create an OAuth
-  client, `gmail-send setup <file>`, `gmail-send login`.
+- **`gmail-send`:** install the `gmail` plugin, create an OAuth client, `gmail-send setup <file>`, `gmail-send login`.
+
+The whole setup, step by step and written to hand to Claude:
+[Set up Gmail for Claude on a Mac](./gmail-setup-with-claude.md).
 
 **The setup cost is real.** `gmail-send` signs in with an OAuth client that **you** create in Google Cloud (about 5
 minutes, once per Google account). This repo is public and never ships a client: a company's client in a public repo
