@@ -3,7 +3,7 @@
 
 Checks: every module has module.yaml + README.md; every relative markdown link resolves; every tracked .md is
 reachable from AGENTS.md; ADR filenames and headers are valid, none is `proposed`, and each is in the ADR index;
-CLAUDE.md and CURSOR.md point at AGENTS.md.
+CLAUDE.md and CURSOR.md point at AGENTS.md; no OAuth client file is tracked.
 """
 import re
 import subprocess
@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-MODULES = ["plugins/whatsapp", "plugins/whatsapp/bridge", "plugins/whatsapp/server"]
+MODULES = ["plugins/whatsapp", "plugins/whatsapp/bridge", "plugins/whatsapp/server", "plugins/gmail"]
 ADR_DIR = ROOT / "docs/architecture/decisions"
 ADR_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}-[0-9a-f]{6}-[a-z0-9-]+\.md$")
 ADR_HEADERS = ["Status", "Date", "Deciders", "Scope", "Supersedes / Amends"]
@@ -88,6 +88,12 @@ for adr in sorted(ADR_DIR.glob("*.md")):
         errors.append(f"{adr.name}: scope must be one of {sorted(SCOPES)}")
     if f"({'./' + adr.name})" not in index:
         errors.append(f"{adr.name}: not listed in decisions/README.md")
+
+# Security model G7: no OAuth client (personal config) in this public repo
+tracked = subprocess.run(["git", "ls-files", "-c", "--", "*client_secret*.json"], cwd=ROOT, capture_output=True,
+                         text=True, check=True).stdout.split()
+for f in tracked:
+    errors.append(f"{f}: an OAuth client must never be committed (security model G7)")
 
 for entry in ("CLAUDE.md", "CURSOR.md"):
     if "AGENTS.md" not in (ROOT / entry).read_text():

@@ -4,3 +4,5 @@ __pycache__/
 store/
 .DS_Store
 .pytest_cache/
+# OAuth clients are personal; never commit one (security model G7)
+client_secret*.json
