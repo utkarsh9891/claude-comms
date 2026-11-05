@@ -3,6 +3,13 @@
 Notable changes per plugin version (`plugins/<plugin>/.claude-plugin/plugin.json`); unprefixed headings are the
 `whatsapp` plugin. Back to [AGENTS.md](./AGENTS.md).
 
+## gmail 0.3.0 — 2026-11-05
+
+- **Armed sends:** `gmail-send --arm <to> -s "<subject pattern>" [--times N] [--for 45m] "<text pattern>"` approves,
+  with one Touch ID scan, up to N plain emails to exactly those recipients whose subject and text fit the patterns,
+  sent later without asking, for at most an hour (Google's key lifetime); `--armed` lists, `--disarm` drops
+  ([ADR c41e0b](./docs/architecture/decisions/2026-11-05-c41e0b-gmail-armed-sends-one-hour-key.md)).
+
 ## gmail 0.2.0 — 2026-11-05
 
 - **Replies in a thread:** `gmail-send --reply-to <message id> [--all]` answers in the original's thread

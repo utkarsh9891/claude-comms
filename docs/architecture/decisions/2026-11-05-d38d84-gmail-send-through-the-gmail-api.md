@@ -1,6 +1,6 @@
 # 2026-11-05-d38d84 — Gmail channel: `gmail-send` through the Gmail API, every send behind Touch ID
 
-- **Status:** amended by 847f76
+- **Status:** amended by 847f76, c41e0b
 - **Date:** 2026-11-05
 - **Deciders:** Utkarsh Upadhyay
 - **Scope:** gmail
