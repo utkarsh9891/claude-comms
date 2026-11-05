@@ -2,7 +2,8 @@
 
 Manifest: [`module.yaml`](./module.yaml) · Back to [AGENTS.md](../../AGENTS.md) ·
 Decision: [ADR d38d84](../../docs/architecture/decisions/2026-11-05-d38d84-gmail-send-through-the-gmail-api.md) ·
-Security: [Gmail threats](../../docs/architecture/security-model.md#gmail)
+Security: [Gmail threats](../../docs/architecture/security-model.md#gmail) ·
+With the connector: [the connector reads, `gmail-send` sends](../../docs/guides/gmail-connector-and-gmail-send.md)
 
 `gmail-send` sends mail as you through the Gmail API, reading attachments straight from disk, so a file arrives
 byte-for-byte as it is. It sends, saves drafts and replies in a thread, quoting the original; it reads only the
@@ -59,8 +60,9 @@ Prereqs: `brew install uv`, and the Command Line Tools for `swiftc` (`xcode-sele
    lasting sign-in is stored only encrypted to a Secure Enclave key that needs your Touch ID for every use.
 4. **Check:** `gmail-send me -s "Test" --file ~/Downloads/<some file> "hello"` (one Touch ID prompt).
 5. **Close other ways to send:** if a hosted Gmail connector is connected, deny its send, reply, forward and
-   draft tools in `~/.claude/settings.json` (`permissions.deny`), or disconnect it; otherwise it sends without
-   Touch ID ([G8](../../docs/architecture/security-model.md#gmail)).
+   draft tools in `~/.claude/settings.json` (`permissions.deny`; the exact list is in the
+   [connector guide](../../docs/guides/gmail-connector-and-gmail-send.md#access-controls)), or disconnect it;
+   otherwise it sends without Touch ID ([G8](../../docs/architecture/security-model.md#gmail)).
 
 ### Create your OAuth client
 

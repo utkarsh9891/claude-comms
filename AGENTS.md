@@ -43,7 +43,9 @@ that.
   | `gmail` | [`plugins/gmail/`](./plugins/gmail/README.md) | [`module.yaml`](./plugins/gmail/module.yaml) | Claude Code plugin: `gmail-send`, the Gmail for Claude Touch ID lock, `/gmail-setup`, installer |
 
 - **Using it**
-  - [Gmail: `gmail-send`](./plugins/gmail/README.md) — set up, send, drafts, attachments, the Touch ID lock
+  - [Gmail: the connector reads, `gmail-send` sends](./docs/guides/gmail-connector-and-gmail-send.md) — how the two
+    tools work together, their access controls (deny rules, Touch ID) and the setup cost
+  - [Gmail: `gmail-send`](./plugins/gmail/README.md) — set up, send, drafts, replies, attachments, the Touch ID lock
   - [Claude Code guide](./docs/guides/claude-code.md) — the `wa` session, what it allows and asks
   - [Allowlist guide](./docs/guides/allowlist.md) — choosing which chats are captured and which can be replied to,
     and [finding a chat](./docs/guides/allowlist.md#finding-a-chat) by name, number or part of a name
