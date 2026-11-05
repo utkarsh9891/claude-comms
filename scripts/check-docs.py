@@ -15,7 +15,7 @@ MODULES = ["plugins/whatsapp", "plugins/whatsapp/bridge", "plugins/whatsapp/serv
 ADR_DIR = ROOT / "docs/architecture/decisions"
 ADR_NAME = re.compile(r"^\d{4}-\d{2}-\d{2}-[0-9a-f]{6}-[a-z0-9-]+\.md$")
 ADR_HEADERS = ["Status", "Date", "Deciders", "Scope", "Supersedes / Amends"]
-SCOPES = {"bridge", "server", "plugin", "repo"}
+SCOPES = {"bridge", "server", "plugin", "gmail", "repo"}
 # Files GitHub or tools read directly, not part of the doc graph
 UNREACHABLE_OK = {".github/pull_request_template.md"}
 LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")

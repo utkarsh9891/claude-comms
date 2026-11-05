@@ -15,8 +15,8 @@ agent) knows *why* this repo is the way it is and *when* a decision should be re
 - **A merged ADR is `accepted`** — the reviewed merge is the acceptance. `proposed` only on a draft PR.
 - **Immutable once on `main`.** Edit freely while the PR is open; after merge, change a decision only with a new
   ADR that supersedes or amends it, and update the old one's `Status` line to point at it.
-- **Scope** names the module the decision governs: `bridge`, `server`, `plugin`, or `repo` (cross-cutting or
-  governance).
+- **Scope** names the module the decision governs: `bridge`, `server`, `plugin` (WhatsApp), `gmail`, or `repo`
+  (cross-cutting or governance).
 - Enforced by [`scripts/check-docs.py`](../../../scripts/check-docs.py): filename shape, required header lines,
   no `proposed` on `main`, every ADR linked from this index.
 
@@ -39,3 +39,4 @@ agent) knows *why* this repo is the way it is and *when* a decision should be re
 | [2026-10-30-032c66](./2026-10-30-032c66-armed-sends-approve-a-pattern-ahead.md) | Armed sends: approve a message pattern with Touch ID ahead of time | bridge | accepted |
 | [2026-10-30-7e2c9d](./2026-10-30-7e2c9d-chat-discovery-contact-names-and-partial-match.md) | Find chats by contact name, number or part of a name | bridge | accepted |
 | [2026-11-05-2d0dd3](./2026-11-05-2d0dd3-rename-repo-to-claude-comms.md) | Rename the repo to claude-comms; one plugin per channel | repo | accepted |
+| [2026-11-05-d38d84](./2026-11-05-d38d84-gmail-send-through-the-gmail-api.md) | Gmail channel: `gmail-send` through the Gmail API, Touch ID before mail to others | gmail | accepted |
