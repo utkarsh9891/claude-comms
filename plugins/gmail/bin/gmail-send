@@ -5,15 +5,16 @@
 """Send mail with local attachments from any terminal, through the Gmail API.
 
   gmail-send <to>[,<to>…] -s "<subject>" [--cc <addr>[,…]] [--file <path>]… [--html <file>] [--draft] [text… | -]
-  gmail-send --reply-to <message id> [--all] [--to …] [--cc …] [-s …] [--file …] [--html …] [--draft] [text… | -]
+  gmail-send --reply-to <message id> [--all] [--no-quote] [--to …] [--cc …] [-s …] [--file …] [--html …] [--draft] [text… | -]
   gmail-send setup <client_secret….json>   store your Desktop-app OAuth client (once per machine)
-  gmail-send login                         sign in to Google (send, drafts, email headers for replies; no bodies)
+  gmail-send login                         sign in to Google (send, drafts; read an email only to reply to it)
   gmail-send status                        client, account, Touch ID helper, send folders
   gmail-send logout                        revoke and delete the sign-in
 
 --reply-to answers a Gmail message in its thread (id from the Gmail URL or the connector): to its sender, or with
---all to everyone on it except you; subject "Re: <original>" unless -s; --to/--cc replace the recipients. It
-reads only the original's headers, after its own Touch ID scan, then asks again to send.
+--all to everyone on it except you; subject "Re: <original>" unless -s; --to/--cc replace the recipients. The
+original is quoted below your text, as Gmail does, unless --no-quote. It reads that one email after its own Touch
+ID scan (the quoted text is never printed), then asks again to send.
 
 <to> and --cc take plain addresses, comma-separated; "me" is the signed-in address. Text is the remaining
 arguments, or stdin with "-". --html adds an HTML version read from a file (the text stays as the plain
@@ -38,6 +39,7 @@ def send_args(argv):
         p.add_argument("--to", action="append", default=[])
         p.add_argument("--reply-to", required=True)
         p.add_argument("--all", action="store_true")
+        p.add_argument("--no-quote", action="store_true")
         p.add_argument("-s", "--subject")
     else:
         p.add_argument("to")
@@ -75,7 +77,8 @@ def main(argv):
             text = sys.stdin.read() if a.text == ["-"] else " ".join(a.text)
             to = a.to if isinstance(a.to, list) else [a.to]
             g.send(to, a.cc, a.subject, text, a.file, html_file=a.html, dry_run=a.dry_run, draft=a.draft,
-                   reply_to=getattr(a, "reply_to", None), reply_all=a.all)
+                   reply_to=getattr(a, "reply_to", None), reply_all=a.all,
+                   quote=not getattr(a, "no_quote", False))
     except g.Refused as e:
         print(f"gmail-send: {e}", file=sys.stderr)
         return 1

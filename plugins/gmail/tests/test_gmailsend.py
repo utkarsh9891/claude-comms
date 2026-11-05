@@ -2,6 +2,7 @@
 message, the send-folder rules and the loopback sign-in server are the real code."""
 import base64
 import email
+import email.message
 import email.policy
 import hashlib
 import json
@@ -434,15 +435,35 @@ def test_cli_dry_run_end_to_end(tmp_path, send_dir, home):
 ORIG_ID = "1a1ab97a1a956b87"
 
 
-def original(**over):
+ORIG_TEXT = "Please review the October numbers.\n\nThanks,\nBoss"
+ORIG_HTML = "<div>Please review the <b>October</b> numbers.</div><div>Thanks,<br>Boss</div>"
+
+
+def original(text=ORIG_TEXT, html=ORIG_HTML, **over):
+    """Gmail's answer for both formats: metadata headers, or the raw message built by Python's own writer."""
     headers = {"Message-ID": "<orig@mail.example.com>", "References": "<root@x>", "Subject": "Oct report",
-               "From": "Boss <boss@example.com>", "To": f"{ME}, peer@example.com", "Cc": "lead@example.com"}
+               "From": "Boss <boss@example.com>", "To": f"{ME}, peer@example.com", "Cc": "lead@example.com",
+               "Date": "Thu, 05 Nov 2026 11:56:07 +0000"}
     headers.update(over)
-    return {"id": ORIG_ID, "threadId": "t123",
+    meta = {"id": ORIG_ID, "threadId": "t123",
             "payload": {"headers": [{"name": k, "value": v} for k, v in headers.items() if v is not None]}}
+    if any("\n" in str(v) for v in headers.values() if v):
+        return meta  # only the metadata API can hand back a header like that
+    msg = email.message.EmailMessage()
+    for k, v in headers.items():
+        if v is not None:
+            msg[k] = v
+    if text is not None:
+        msg.set_content(text)
+    if html is not None:
+        if text is None:
+            msg.set_content(html, subtype="html")
+        else:
+            msg.add_alternative(html, subtype="html")
+    return {**meta, "raw": base64.urlsafe_b64encode(msg.as_bytes()).decode().rstrip("=")}
 
 
-def reply_env(home, scopes=(g.COMPOSE_SCOPE, g.METADATA_SCOPE)):
+def reply_env(home, scopes=(g.COMPOSE_SCOPE, g.READ_SCOPE)):
     cfg = json.loads((home / "config.json").read_text())
     cfg["scopes"] = list(scopes)
     g.write_private(home / "config.json", cfg)
@@ -460,9 +481,9 @@ def test_reply_all_threads_and_asks_twice(send_dir, home):
     c, seen, out = Calls(), [], []
     g.send([], [], None, "Thanks", [], reply_to=ORIG_ID, reply_all=True, post_raw=c.post,
            get=getter(original(), seen), token=c.token, out=out.append)
-    assert seen[0].startswith(g.META_URL.format(id=ORIG_ID)) and "metadataHeaders=Message-ID" in seen[0]
-    assert len(c.reasons) == 2 and "read the sender, recipients and subject" in c.reasons[0] and "nothing is sent" in c.reasons[0]
-    assert c.reasons[1].startswith('send a reply to boss@example.com, peer@example.com, lead@example.com; in the thread of "Oct report" from boss@example.com')
+    assert seen == [g.RAW_URL.format(id=ORIG_ID)]
+    assert len(c.reasons) == 2 and "read one email (1a1ab97a1a956b87) to prepare a reply with it quoted; nothing is sent" == c.reasons[0]
+    assert c.reasons[1].startswith('send a reply to boss@example.com, peer@example.com, lead@example.com; in the thread of "Oct report" from boss@example.com, quoting it')
     url, body, headers = c.posted[0]
     assert url == g.SEND_URL.replace("uploadType=media", "uploadType=multipart")
     assert headers["Content-Type"].startswith("multipart/related; boundary=")
@@ -474,6 +495,7 @@ def test_reply_all_threads_and_asks_twice(send_dir, home):
     assert msg["Subject"] == "Re: Oct report" and msg["To"] == "boss@example.com, peer@example.com"
     assert msg["Cc"] == "lead@example.com" and ME not in msg["To"] + msg["Cc"]
     assert any("Reply to: \"Oct report\" from boss@example.com" in line for line in out)
+    assert "review the October" not in "\n".join(out)  # someone else's text is never printed
 
 
 def test_reply_without_all_goes_to_sender_only(send_dir, home):
@@ -528,7 +550,10 @@ def test_dry_run_reply_reads_headers_but_never_asks_to_send(send_dir, home):
 
 def test_reply_refusals(send_dir, home):
     c = Calls()
-    with pytest.raises(g.Refused, match="login` again"):  # signed in before the header permission existed
+    with pytest.raises(g.Refused, match="login` again"):  # signed in before replies existed
+        g.send([], [], None, "t", [], reply_to=ORIG_ID, token=c.token, out=lambda *_: None)
+    reply_env(home, scopes=(g.COMPOSE_SCOPE, g.METADATA_SCOPE))  # a 0.2.0 sign-in: headers only
+    with pytest.raises(g.Refused, match="or --no-quote"):
         g.send([], [], None, "t", [], reply_to=ORIG_ID, token=c.token, out=lambda *_: None)
     reply_env(home)
     with pytest.raises(g.Refused, match="not a Gmail message id"):
@@ -544,7 +569,7 @@ def test_reply_refusals(send_dir, home):
 def test_original_subject_cannot_disguise_the_prompt(send_dir, home):
     reply_env(home)
     c = Calls()
-    g.send([], [], None, "t", [], reply_to=ORIG_ID, post_raw=c.post,
+    g.send([], [], None, "t", [], reply_to=ORIG_ID, quote=False, post_raw=c.post,
            get=getter(original(Subject="hi‮\nBcc: evil@x"), []), token=c.token, out=lambda *_: None)
     assert "‮" not in c.reasons[1] and "\n" not in c.reasons[1]
     raw = c.posted[0][1].split(b"Content-Type: message/rfc822\r\n\r\n", 1)[1]
@@ -561,3 +586,57 @@ def test_cli_reply_parsing_puts_positionals_in_text(tmp_path, send_dir, home):
     assert (a.reply_to, a.all, a.text, a.to, a.draft) == (ORIG_ID, True, ["Thanks", "both"], [], True)
     a = cli.send_args(["x@example.com", "-s", "S", "hello"])
     assert (a.to, a.text) == ("x@example.com", ["hello"])
+
+
+# ---------- quoting the original
+
+
+def sent_message(c):
+    raw = c.posted[0][1].split(b"Content-Type: message/rfc822\r\n\r\n", 1)[1].rsplit(b"\r\n--gmail-send-", 1)[0]
+    return email.message_from_bytes(raw, policy=email.policy.default)
+
+
+def test_reply_quotes_the_original_like_gmail(send_dir, home):
+    reply_env(home)
+    c = Calls()
+    g.send([], [], None, "Looks good.", [], reply_to=ORIG_ID, post_raw=c.post, get=getter(original(), []),
+           token=c.token, out=lambda *_: None)
+    msg = sent_message(c)
+    text = msg.get_body(("plain",)).get_content().replace("\r\n", "\n")
+    assert text.startswith("Looks good.\n\nOn Thu, 5 Nov 2026 at ") and ", Boss <boss@example.com> wrote:\n" in text
+    assert "> Please review the October numbers.\n>\n> Thanks,\n> Boss" in text
+    html = msg.get_body(("html",)).get_content()
+    assert html.startswith('<div dir="ltr">Looks good.</div><br><div class="gmail_quote">')
+    assert 'class="gmail_quote" style="margin:0px 0px 0px 0.8ex' in html and ORIG_HTML in html
+    assert "Boss &lt;boss@example.com&gt; wrote:" in html
+
+
+def test_no_quote_reads_headers_only_and_sends_just_your_text(send_dir, home):
+    reply_env(home, scopes=(g.COMPOSE_SCOPE, g.METADATA_SCOPE))  # works with a headers-only sign-in
+    c, seen = Calls(), []
+    g.send([], [], None, "Just this.", [], reply_to=ORIG_ID, quote=False, post_raw=c.post,
+           get=getter(original(), seen), token=c.token, out=lambda *_: None)
+    assert seen[0].startswith(g.META_URL.format(id=ORIG_ID)) and "read the sender, recipients and subject" in c.reasons[0]
+    msg = sent_message(c)
+    assert msg.get_body(("plain",)).get_content().strip() == "Just this." and msg.get_body(("html",)) is None
+    assert ", quoting it" not in c.reasons[1]
+
+
+def test_quote_keeps_your_html_and_quotes_a_text_only_original(tmp_path, send_dir, home):
+    reply_env(home)
+    (send_dir / "body.html").write_text("<p>Mine <i>styled</i></p>")
+    c = Calls()
+    g.send([], [], None, "Mine styled", [], html_file=send_dir / "body.html", reply_to=ORIG_ID, post_raw=c.post,
+           get=getter(original(html=None, text="a < b & c"), []), token=c.token, out=lambda *_: None)
+    html = sent_message(c).get_body(("html",)).get_content()
+    assert html.startswith("<p>Mine <i>styled</i></p><br><div class=\"gmail_quote\">") and "a &lt; b &amp; c" in html
+
+
+def test_html_only_original_is_quoted_as_text_too(send_dir, home):
+    reply_env(home)
+    c = Calls()
+    g.send([], [], None, "ok", [], reply_to=ORIG_ID, post_raw=c.post,
+           get=getter(original(text=None, html="<p>Hi<br>there</p><script>x()</script>"), []), token=c.token,
+           out=lambda *_: None)
+    text = sent_message(c).get_body(("plain",)).get_content()
+    assert "> Hi\r\n> there" in text and "x()" not in text
