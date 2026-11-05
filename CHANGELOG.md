@@ -15,6 +15,9 @@ Notable changes per plugin version (`plugins/<plugin>/.claude-plugin/plugin.json
   `gmail-send signature --refresh` fetches it again) and added to every send, reply and draft, under your text
   and above any quote, as Gmail does; `--no-signature` leaves it out.
 - `--html -` reads the HTML version from stdin, so no file is needed.
+- New guide: [Set up Gmail for Claude on a Mac](./docs/guides/gmail-setup-with-claude.md), written to hand to Claude:
+  plugin, connector and deny rules, the OAuth client with links and console search terms, sign-in, signature, tests,
+  troubleshooting.
 - New guide: [the connector reads, `gmail-send` sends](./docs/guides/gmail-connector-and-gmail-send.md): how the
   two tools work together, the deny rules on the connector's sending tools, and the setup cost.
 - `gmail-send logout` no longer asks for Touch ID: it deletes the sealed sign-in and its key from the Mac.

@@ -49,6 +49,9 @@ those first. To change the folders, set `"send_from": [...]` in `~/.gmail-send/c
 
 ## Set up (once per Mac)
 
+The full walkthrough, written to hand to Claude Code, is
+[Set up Gmail for Claude on a Mac](../../docs/guides/gmail-setup-with-claude.md). In short:
+
 Prereqs: `brew install uv`, and the Command Line Tools for `swiftc` (`xcode-select --install`).
 
 1. **Install the plugin** and run `/gmail-setup` in Claude Code (or `bin/install.sh` without Claude). This builds
