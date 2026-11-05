@@ -39,6 +39,20 @@ and `-s` replace those. The prompt names the email and "its sender" or "everyone
 names first
 ([ADR 847f76](../../docs/architecture/decisions/2026-11-05-847f76-gmail-replies-read-headers-behind-their-own-scan.md)).
 
+**Armed sends** let mail go out later without a scan, for messages you want sent when a step finishes:
+
+```bash
+gmail-send --arm me -s "Build {id} done" --times 3 --for 45m "Details: {url}"   # one Touch ID scan now
+gmail-send me -s "Build PR-42 done" "Details: https://ci.example.com/42"          # later: no scan, it matches
+gmail-send --armed                                                                # what's armed; --disarm [<id>]
+```
+
+One scan approves up to `--times` emails (default 1, at most 20) to exactly those recipients whose whole subject
+and text fit the patterns, within `--for` (default and at most 1 hour: Google's key lifetime). Slots: `{num}`,
+`{id}` (ticket, PR, branch, SHA), `{url}` (one https link), `{text}` (a line up to 100 characters); `{{ }}` are
+literal braces. Files, HTML, drafts and replies always ask. While armed, the one-hour key, limited to
+sending and drafts (it can't read your inbox), sits in `~/.gmail-send/armed.json` (0600) ([ADR c41e0b](../../docs/architecture/decisions/2026-11-05-c41e0b-gmail-armed-sends-one-hour-key.md)).
+
 **Your signature** lives in `~/.gmail-send/signature.html`: saved from Gmail when you sign in, editable, and
 added under your text (above any quote) on every send, reply and draft, as Gmail does; `--no-signature` leaves it
 out. `gmail-send signature` shows it; `gmail-send signature --refresh` fetches Gmail's again (one scan).
@@ -90,6 +104,8 @@ admin to allow this client, or use the hosted Gmail connector for text-only mail
 |---|---|
 | `gmail-send <to> -s <subject> [--cc …] [--file …]… [--html <file>] [--draft] [--dry-run] [--no-signature] [text… \| -]` | send (or save a draft); `me` is your address; addresses are plain and comma-separated |
 | `gmail-send --reply-to <id> [--all] [--no-quote] [--to …] [--cc …] [-s …] [--file …]… [--html …] [--draft] [--dry-run] [text…]` | reply in the original's thread, quoting it (one scan) |
+| `gmail-send --arm <to> [--cc …] -s <subject pattern> [--for 45m] [--times N] <text pattern>` | approve matching emails ahead, one scan, at most an hour |
+| `gmail-send --armed` / `--disarm [<id>]` | list armed patterns / drop one or all (no scan) |
 | `gmail-send setup <client_secret….json>` | store your Desktop-app client (rejects other client types) |
 | `gmail-send login` | Google sign-in in the browser (send, drafts; read an email only to reply to it); locks the sign-in to Touch ID |
 | `gmail-send status` | client, signed-in account, Touch ID helper, send folders |
@@ -111,5 +127,6 @@ fingerprint (the lock is tied to the enrolled fingers).
 | [`commands/gmail-setup.md`](./commands/gmail-setup.md) | `/gmail-setup [client file]`: install, store the client, sign in, test Touch ID |
 | [`tests/`](./tests/test_gmailsend.py) | send folders, message round trip, the lock (with a stand-in helper), sign-in through the real loopback server, the command |
 
-On this machine, not in the repo: `~/.gmail-send/client.json`, `config.json`, `signature.html`, `token.sealed` and `key.se`
+On this machine, not in the repo: `~/.gmail-send/client.json`, `config.json`, `signature.html`, `armed.json` (only
+while armed), `token.sealed` and `key.se`
 (0600, folder 0700; the last two useless without your Touch ID on this Mac), and the built `~/.gmail-send/app/`.

@@ -57,6 +57,8 @@ your phone.
 **2. The Touch ID lock on `gmail-send`.** Its Google sign-in exists only encrypted to a Secure Enclave key that
 needs your fingerprint for every use; macOS enforces it, so no process can send as you through it without a scan.
 One scan per send, draft or reply; none for `setup`, `login`, `status`, `logout` or `--dry-run` of a new email.
+**Armed sends** are the one exception: one scan approves a pattern, and matching plain emails then go out without
+a scan for at most an hour, using a one-hour key stored for that window ([gmail README](../../plugins/gmail/README.md)).
 
 **3. What `gmail-send` may read and attach.** Only the email named by `--reply-to`, within that reply's scan;
 attachments and `--html` files only from the send folders.

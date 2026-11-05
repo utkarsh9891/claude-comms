@@ -8,6 +8,7 @@ helper), so every send and every draft, to anyone, needs a scan.
 import base64
 import email.policy
 import email.utils
+import fcntl
 import html as htmllib
 from datetime import datetime
 from html.parser import HTMLParser
@@ -290,16 +291,30 @@ def login(open_browser=webbrowser.open, post=http_json, store=seal_token, wait=6
 def access_token(reason, post=http_json, unlock=unlock_token):
     """One Touch ID scan (showing `reason`) unlocks the refresh token, exchanged here for a one-hour access token
     that is used once and never stored."""
+    return access_key(reason, post=post, unlock=unlock)[0]
+
+
+def access_key(reason, post=http_json, unlock=unlock_token, scope=None):
+    """Like access_token, plus how many seconds Google says the key lives (an hour). With `scope`, asks Google for a
+    key limited to those permissions (a subset of the sign-in's) and refuses one that comes back broader."""
     client = load_client()
     refresh = unlock(reason)
+    fields = {"client_id": client["client_id"], "client_secret": client.get("client_secret", ""),
+              "refresh_token": refresh, "grant_type": "refresh_token"}
+    if scope:
+        fields["scope"] = scope
     try:
-        tok = post(TOKEN_URL, form({"client_id": client["client_id"], "client_secret": client.get("client_secret", ""),
-                                    "refresh_token": refresh, "grant_type": "refresh_token"}), FORM)
+        tok = post(TOKEN_URL, form(fields), FORM)
     except Refused as e:
         if "invalid_grant" in str(e) or "expired or revoked" in str(e).lower():
             raise Refused("your Google sign-in expired or was revoked: run `gmail-send login`") from None
         raise
-    return tok["access_token"]
+    if scope:
+        granted = set(tok.get("scope", "").split())
+        if not granted or not granted <= set(scope.split()):
+            raise Refused("Google didn't issue a key limited to sending (it came back with: "
+                          f"{' '.join(sorted(granted)) or 'no scope listed'}); nothing was armed")
+    return tok["access_token"], int(tok.get("expires_in", 3599))
 
 
 REVOKE_PAGE = "https://myaccount.google.com/connections"
@@ -639,6 +654,194 @@ def summary(me, to, cc, subject, attachments, text, html, reply=None, quoting=Fa
     return "\n".join(lines)
 
 
+# ---------- armed sends: approve a pattern with one scan, then matching mail goes out unattended for up to an hour
+# The scan mints a one-hour Google access key limited to gmail.compose (send and drafts; it can't read the inbox),
+# kept in armed.json (0600) for the window and deleted when the window or its uses run out. The sealed sign-in itself
+# never leaves the lock. ADR 2026-11-05-c41e0b.
+
+SLOTS = {
+    "num": (r"[0-9][0-9.,]{0,19}", "a number"),
+    "id": (r"[A-Za-z0-9][A-Za-z0-9._:/#-]{0,63}", "a short ID"),
+    "url": (r"https://[^\s]{1,192}", "an https link"),
+    "text": (r"[^\n]{1,100}", "any line of up to 100 characters"),
+}
+ARMED_SCOPE = COMPOSE_SCOPE  # the stored key can send and manage drafts, never read the inbox
+MAX_PATTERN = 150
+MAX_TIMES = 20
+KEY_MARGIN = 120  # stop using a key two minutes before Google expires it
+UNSHOWABLE = re.compile(r"[\x00-\x09\x0b-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2066-\u2069]")
+
+
+def compile_pattern(pattern, what):
+    """A regex that must match the whole value, and the slot kinds used. Fixed text plus {num} {id} {url} {text};
+    {{ and }} are literal braces. Refuses what the prompt couldn't show whole."""
+    if len(pattern) > MAX_PATTERN or UNSHOWABLE.search(pattern):
+        raise Refused(f"the {what} pattern must be at most {MAX_PATTERN} characters, without control or "
+                      "text-direction characters, so the Touch ID prompt shows all of it")
+    out, fixed, kinds, rest = [r"\A"], [], [], pattern
+    while rest:
+        if rest.startswith(("{{", "}}")):
+            out.append(re.escape(rest[0])); fixed.append(rest[0]); rest = rest[2:]
+        elif rest[0] == "{":
+            end = rest.find("}")
+            if end < 0:
+                raise Refused(f"a {{ without a closing }} in the {what} pattern; write {{{{ for a literal brace")
+            name = rest[1:end]
+            if name not in SLOTS:
+                raise Refused(f"unknown slot {{{clean(name, 20)}}} in the {what} pattern; use {{num}}, {{id}}, "
+                              "{url} or {text}")
+            out.append(f"(?:{SLOTS[name][0]})")
+            if name not in kinds:
+                kinds.append(name)
+            rest = rest[end + 1:]
+        elif rest[0] == "}":
+            raise Refused(f"a }} without an opening {{ in the {what} pattern; write }}}} for a literal brace")
+        else:
+            nxt = min([i for i in (rest.find("{"), rest.find("}")) if i >= 0] or [len(rest)])
+            out.append(re.escape(rest[:nxt])); fixed.append(rest[:nxt]); rest = rest[nxt:]
+    out.append(r"\Z")
+    return re.compile("".join(out)), kinds, "".join(fixed)
+
+
+def parse_duration(value):
+    m = re.fullmatch(r"(?:(\d+)h)?(?:(\d+)m)?", (value or "").strip())
+    if not value or not m or not any(m.groups()):
+        raise Refused(f"--for takes a time like 30m, 45m or 1h (got {value!r})")
+    return int(m.group(1) or 0) * 3600 + int(m.group(2) or 0) * 60
+
+
+def armed_path():
+    return HOME / "armed.json"
+
+
+class _ArmedFile:
+    """armed.json under an exclusive lock: load drops what has expired or run out; save writes 0600."""
+
+    def __enter__(self):
+        ensure_home()
+        self.lock = open(HOME / "armed.lock", "a")
+        fcntl.flock(self.lock, fcntl.LOCK_EX)
+        try:
+            entries = json.loads(armed_path().read_text())
+        except (FileNotFoundError, ValueError):
+            entries = []
+        now = time.time()
+        # kept while unexpired and either uses remain or a send that took the last one is still in flight
+        self.entries = [e for e in entries if e.get("until", 0) > now
+                        and (e.get("left", 0) > 0 or e.get("inflight", 0) > 0)]
+        if len(self.entries) != len(entries):
+            self.save()
+        return self
+
+    def save(self):
+        if self.entries:
+            write_private(armed_path(), self.entries)
+        else:
+            armed_path().unlink(missing_ok=True)
+
+    def __exit__(self, *exc):
+        fcntl.flock(self.lock, fcntl.LOCK_UN)
+        self.lock.close()
+
+
+def describe_slots(kinds):
+    return "; ".join(f"{{{k}}} is {SLOTS[k][1]}" for k in kinds)
+
+
+def arm(to_values, cc_values, subject_pattern, text_pattern, for_value=None, times=1, key=access_key,
+        clock=time.time, out=print):
+    """One Touch ID scan approves sending up to `times` emails to exactly these recipients whose subject and text
+    match the patterns, without asking, until the window ends (at most the key's hour)."""
+    me = load_config().get("account")
+    if not me:
+        raise Refused("not signed in: run `gmail-send login`")
+    to = parse_recipients(to_values, me)
+    cc = [a for a in parse_recipients(cc_values, me) if a.lower() not in (t.lower() for t in to)]
+    if not to:
+        raise Refused("no recipient")
+    _, s_kinds, s_fixed = compile_pattern(subject_pattern or "", "subject")
+    _, t_kinds, t_fixed = compile_pattern(text_pattern or "", "text")
+    if not re.search(r"\w", s_fixed + t_fixed):
+        raise Refused("the patterns need some fixed text, not only slots: that would approve anything")
+    if not 1 <= times <= MAX_TIMES:
+        raise Refused(f"--times must be 1 to {MAX_TIMES}")
+    want = parse_duration(for_value) if for_value else None
+    if want is not None and want > 3600:
+        raise Refused("arming lasts at most 1 hour (Google's key lifetime); arm again after it ends")
+    kinds = s_kinds + [k for k in t_kinds if k not in s_kinds]
+    span = f"{want // 60} min" if want else "the next hour"
+    reason = (f"send {times} email{'s' if times > 1 else ''} without asking, within {span}, to "
+              f"{', '.join(to)}" + (f", cc {', '.join(cc)}" if cc else "") +
+              f'; subject "{subject_pattern}"; text "{text_pattern}"'.replace("\n", " ") +
+              (f" ({describe_slots(kinds)})" if kinds else "") + "; no files, no HTML")
+    out("Asking for Touch ID to arm…")
+    bearer, lives = key(reason, scope=ARMED_SCOPE)
+    now = clock()
+    key_until = now + lives - KEY_MARGIN
+    until = min(now + want, key_until) if want else key_until
+    entry = {"id": secrets.token_hex(3), "to": to, "cc": cc, "subject": subject_pattern, "text": text_pattern,
+             "left": times, "until": until, "key": bearer}
+    with _ArmedFile() as f:
+        f.entries.append(entry)
+        f.save()
+    out(f"Armed {entry['id']}: {times} send{'s' if times > 1 else ''} to {', '.join(to)} matching the patterns, "
+        f"without Touch ID, until {datetime.fromtimestamp(until).strftime('%H:%M')}.")
+    return entry
+
+
+def armed_list():
+    with _ArmedFile() as f:
+        return [{k: v for k, v in e.items() if k != "key"} for e in f.entries]
+
+
+def disarm(entry_id=None):
+    with _ArmedFile() as f:
+        before = len(f.entries)
+        f.entries = [e for e in f.entries if entry_id and e["id"] != entry_id]
+        f.save()
+        return before - len(f.entries)
+
+
+def same_people(a, b):
+    return sorted(x.lower() for x in a) == sorted(x.lower() for x in b)
+
+
+def take_armed(to, cc, subject, text):
+    """The armed entry this email matches, with one use taken, or None. The caller gives the use back if Google
+    refuses the send."""
+    with _ArmedFile() as f:
+        for e in f.entries:
+            if (e["left"] > 0 and same_people(e["to"], to) and same_people(e["cc"], cc)
+                    and compile_pattern(e["subject"], "subject")[0].match(subject or "")
+                    and compile_pattern(e["text"], "text")[0].match(text or "")):
+                e["left"] -= 1
+                e["inflight"] = e.get("inflight", 0) + 1
+                f.save()
+                return dict(e)
+    return None
+
+
+def _settle(entry_id, sent):
+    """After the send: done (sent) or give the use back (refused). An entry with no uses left is then deleted."""
+    with _ArmedFile() as f:
+        for e in f.entries:
+            if e["id"] == entry_id:
+                e["inflight"] = max(0, e.get("inflight", 0) - 1)
+                if not sent:
+                    e["left"] += 1
+        f.entries = [e for e in f.entries if e["left"] > 0 or e.get("inflight", 0) > 0]
+        f.save()
+
+
+def give_back(entry_id):
+    _settle(entry_id, sent=False)
+
+
+def armed_for(to):
+    with _ArmedFile() as f:
+        return any(same_people(e["to"], to) for e in f.entries)
+
+
 def send(to_values, cc_values, subject, text, files, html_file=None, dry_run=False, draft=False,
          reply_to=None, reply_all=False, quote=True, signature=True, post_raw=None, get=None,
          token=access_token, out=print, html_text=None):
@@ -691,6 +894,15 @@ def send(to_values, cc_values, subject, text, files, html_file=None, dry_run=Fal
     if dry_run:
         out("Dry run: nothing sent or saved.")
         return None
+    armed = None
+    if bearer is None and not (reply or draft or attachments or html):
+        armed = take_armed(to, cc, subject, text)
+        if armed:
+            bearer = armed["key"]
+            out(f"Matches armed pattern {armed['id']}: sending without Touch ID ({armed['left']} left, until "
+                f"{datetime.fromtimestamp(armed['until']).strftime('%H:%M')}).")
+        elif armed_for(to):
+            out("Doesn't match what is armed for these recipients.")
     if bearer is None:
         out("Asking for Touch ID…")
         bearer = token(approval_reason(to + cc, subject, attachments, text, html, me=me, draft=draft))
@@ -702,7 +914,14 @@ def send(to_values, cc_values, subject, text, files, html_file=None, dry_run=Fal
         url = (DRAFT_URL if draft else SEND_URL).replace("uploadType=media", "uploadType=multipart")
         res = poster(url, body, {**auth, "Content-Type": ctype})
     else:
-        res = poster(DRAFT_URL if draft else SEND_URL, raw, {**auth, "Content-Type": "message/rfc822"})
+        try:
+            res = poster(DRAFT_URL if draft else SEND_URL, raw, {**auth, "Content-Type": "message/rfc822"})
+        except Refused:
+            if armed:
+                give_back(armed["id"])
+            raise
+        if armed:
+            _settle(armed["id"], sent=True)
     if draft:
         out(f"Draft saved: {res.get('id')}. Check and send it from Gmail Drafts: "
             f"https://mail.google.com/mail/?authuser={urllib.parse.quote(me)}#drafts")
@@ -723,4 +942,8 @@ def status():
     sig = load_signature()
     lines.append(f"signature: {signature_path()} ({human(len(sig.encode()))})" if sig else
                  f"signature: none ({signature_path()} is missing or empty; gmail-send signature --refresh)")
+    arms = armed_list()
+    lines.append(f"armed:     {len(arms)} pattern{'s' if len(arms) != 1 else ''}" +
+                 (f" (gmail-send --armed; ends by {datetime.fromtimestamp(max(a['until'] for a in arms)).strftime('%H:%M')})"
+                  if arms else ""))
     return "\n".join(lines)
