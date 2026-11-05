@@ -43,6 +43,12 @@ Notable changes per plugin version (`plugins/<plugin>/.claude-plugin/plugin.json
   `~/Downloads`, `~/Desktop`, `~/Documents` and `~/Pictures`. Set up with `/gmail-setup`
   ([plugin README](./plugins/gmail/README.md)).
 
+## 0.10.2 — 2026-11-05
+
+- The installer builds the Touch ID helper even when the Command Line Tools' newest SDK is newer than their Swift
+  compiler ("this SDK is not supported by the compiler"): it retries with each older installed SDK, as the gmail
+  installer does. Before, `/wa-setup` failed on such a Mac.
+
 ## 0.10.1 — 2026-11-05
 
 - **Repo renamed to claude-comms** ([ADR 2d0dd3](./docs/architecture/decisions/2026-11-05-2d0dd3-rename-repo-to-claude-comms.md)):
