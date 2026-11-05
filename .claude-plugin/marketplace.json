@@ -8,9 +8,14 @@
       "name": "whatsapp",
       "source": "./plugins/whatsapp",
       "description": "Read, triage and reply to WhatsApp from a dedicated Claude Code session, with a chat allowlist and a hard block on bypass-permissions mode."
+    },
+    {
+      "name": "gmail",
+      "source": "./plugins/gmail",
+      "description": "Send email with local attachments from any terminal through the Gmail API: your own OAuth client, every send and draft behind your Touch ID."
     }
   ],
   "metadata": {
-    "description": "Claude Code plugins for messaging channels, one per channel. WhatsApp: allowlisted chats, a dedicated session, and a hard block on bypass mode."
+    "description": "Claude Code plugins for messaging channels, one per channel. Gmail: send with attachments, every send behind Touch ID. WhatsApp: allowlisted chats, a dedicated session, and a hard block on bypass mode."
   }
 }

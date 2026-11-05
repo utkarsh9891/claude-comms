@@ -1,0 +1,9 @@
+{
+  "name": "gmail",
+  "version": "0.1.0",
+  "description": "Send email with local attachments from any terminal through the Gmail API: your own OAuth client, send permission only, Touch ID before mail to anyone else.",
+  "author": {
+    "name": "Utkarsh Upadhyay"
+  },
+  "license": "MIT"
+}

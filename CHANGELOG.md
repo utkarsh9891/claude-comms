@@ -1,6 +1,16 @@
 # Changelog
 
-Notable changes per plugin version (`plugins/whatsapp/.claude-plugin/plugin.json`). Back to [AGENTS.md](./AGENTS.md).
+Notable changes per plugin version (`plugins/<plugin>/.claude-plugin/plugin.json`); unprefixed headings are the
+`whatsapp` plugin. Back to [AGENTS.md](./AGENTS.md).
+
+## gmail 0.1.0 — 2026-11-05
+
+- **New plugin, `gmail-send`** ([ADR d38d84](./docs/architecture/decisions/2026-11-05-d38d84-gmail-send-through-the-gmail-api.md)):
+  send mail or save a draft (`--draft`) with local attachments (`--file`), an HTML version (`--html`) and cc
+  through the Gmail API, with your own OAuth client. Every send and draft needs your Touch ID: the sign-in is
+  stored only encrypted to a Secure Enclave key that needs a scan for every use. Attachments only from
+  `~/Downloads`, `~/Desktop`, `~/Documents` and `~/Pictures`. Set up with `/gmail-setup`
+  ([plugin README](./plugins/gmail/README.md)).
 
 ## 0.10.1 — 2026-11-05
 

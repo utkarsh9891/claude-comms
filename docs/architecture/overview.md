@@ -71,6 +71,14 @@ agent/principles/                 always-apply rules for agents working in this 
 scripts/check-docs.py             documentation gate (CI job `docs`)
 ```
 
+## Gmail plugin
+
+No bridge or service: `gmail-send` runs when called, unlocks the Google sign-in with the **Gmail for Claude**
+helper (one Touch ID scan per send or draft) and posts the message to the Gmail API. Files under
+`~/.gmail-send` (0700): `client.json`, `config.json`, `token.sealed`, `key.se` (0600), `app/`. Details:
+[gmail plugin README](../../plugins/gmail/README.md),
+[ADR d38d84](./decisions/2026-11-05-d38d84-gmail-send-through-the-gmail-api.md).
+
 ## Upstream
 
 The bridge and server are a fork of [lharries/whatsapp-mcp](https://github.com/lharries/whatsapp-mcp) at commit

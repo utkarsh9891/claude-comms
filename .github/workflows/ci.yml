@@ -56,8 +56,14 @@ jobs:
           jq -e '.hooks.PreToolUse[0].matcher' plugins/whatsapp/hooks/hooks.json
           jq -e '.permissions.disableBypassPermissionsMode == "disable"' plugins/whatsapp/wa/settings.json
           test "$(jq -r .version plugins/whatsapp/.claude-plugin/plugin.json)" != null
+          jq -e '.name == "gmail" and .version and .description' plugins/gmail/.claude-plugin/plugin.json
+          jq -e '[.plugins[].name] | index("gmail") and index("whatsapp")' .claude-plugin/marketplace.json
       - name: shellcheck
-        run: shellcheck plugins/whatsapp/bin/install.sh plugins/whatsapp/bin/wa plugins/whatsapp/hooks/*.sh
+        run: shellcheck plugins/whatsapp/bin/install.sh plugins/whatsapp/bin/wa plugins/whatsapp/hooks/*.sh plugins/gmail/bin/install.sh
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - name: gmail-send tests
+        working-directory: plugins/gmail
+        run: uv run --no-project --with pytest python -m pytest tests -q
       - name: bypass guard
         run: plugins/whatsapp/hooks/test-bypass-guard.sh
 

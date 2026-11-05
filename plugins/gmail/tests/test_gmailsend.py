@@ -1,0 +1,428 @@
+"""Tests for gmail-send (ADR 2026-11-05-d38d84). Google, the Keychain and Touch ID are stand-ins; the MIME
+message, the send-folder rules and the loopback sign-in server are the real code."""
+import base64
+import email
+import email.policy
+import hashlib
+import json
+import os
+import stat
+import subprocess
+import sys
+import threading
+import urllib.parse
+import urllib.request
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "bin"))
+import gmailsend as g  # noqa: E402
+
+ME = "owner@example.com"
+
+
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    h = tmp_path / "gmail-home"
+    monkeypatch.setattr(g, "HOME", h)
+    return h
+
+
+@pytest.fixture
+def send_dir(tmp_path, home):
+    d = tmp_path / "Downloads"
+    d.mkdir()
+    g.write_private(home / "config.json", {"account": ME, "send_from": [str(d)]})
+    g.write_private(home / "client.json", {"client_id": "cid.apps.googleusercontent.com", "client_secret": "s"})
+    return d
+
+
+def id_token(claims):
+    enc = lambda o: base64.urlsafe_b64encode(json.dumps(o).encode()).rstrip(b"=").decode()  # noqa: E731
+    return f"{enc({'alg': 'none'})}.{enc(claims)}.sig"
+
+
+# ---------- recipients
+
+
+def test_recipients_split_dedupe_and_me():
+    assert g.parse_recipients(["a@x.com, B@x.com", "a@X.com", "me"], ME) == ["a@x.com", "B@x.com", ME]
+
+
+@pytest.mark.parametrize("bad", ["Name <a@x.com>", "a@x", "a b@x.com", "a@x.com\nBcc: c@y.com"])
+def test_recipients_refuse_anything_but_plain_addresses(bad):
+    with pytest.raises(g.Refused):
+        g.parse_recipients([bad], ME)
+
+
+def test_me_needs_a_sign_in():
+    with pytest.raises(g.Refused, match="sign-in"):
+        g.parse_recipients(["me"], None)
+
+
+def test_prompt_calls_your_own_address_you_case_insensitively():
+    r = g.approval_reason(["OWNER@example.com", "x@y.com"], "s", [], "", me=ME)
+    assert r.startswith("send an email to you, x@y.com;")
+
+
+# ---------- send folders (exfiltration guard)
+
+
+def test_sendable_inside_folder(send_dir):
+    f = send_dir / "report.pdf"
+    f.write_bytes(b"%PDF")
+    assert g.sendable(f, [send_dir.resolve()]) == f.resolve()
+
+
+def test_sendable_refuses_outside(tmp_path, send_dir):
+    f = tmp_path / "secret.txt"
+    f.write_text("x")
+    with pytest.raises(g.Refused, match="only from"):
+        g.sendable(f, [send_dir.resolve()])
+
+
+def test_sendable_refuses_dot_dot_escape(tmp_path, send_dir):
+    (tmp_path / "secret.txt").write_text("x")
+    with pytest.raises(g.Refused, match="only from"):
+        g.sendable(send_dir / ".." / "secret.txt", [send_dir.resolve()])
+
+
+def test_sendable_refuses_symlink_escape(tmp_path, send_dir):
+    target = tmp_path / "id_rsa"
+    target.write_text("key")
+    (send_dir / "innocent.pdf").symlink_to(target)
+    with pytest.raises(g.Refused, match="only from"):
+        g.sendable(send_dir / "innocent.pdf", [send_dir.resolve()])
+
+
+def test_sendable_refuses_hidden_components(send_dir):
+    (send_dir / ".ssh").mkdir()
+    (send_dir / ".ssh" / "id_rsa").write_text("key")
+    (send_dir / ".env").write_text("k=v")
+    for p in (send_dir / ".ssh" / "id_rsa", send_dir / ".env"):
+        with pytest.raises(g.Refused, match="hidden"):
+            g.sendable(p, [send_dir.resolve()])
+
+
+def test_sendable_refuses_missing_and_directories(send_dir):
+    with pytest.raises(g.Refused, match="no such file"):
+        g.sendable(send_dir / "nope.pdf", [send_dir.resolve()])
+    (send_dir / "folder").mkdir()
+    with pytest.raises(g.Refused, match="regular file"):
+        g.sendable(send_dir / "folder", [send_dir.resolve()])
+
+
+def test_attachments_over_25_mb_refused(send_dir, monkeypatch):
+    monkeypatch.setattr(g, "MAX_ATTACH", 10)
+    (send_dir / "a.bin").write_bytes(b"x" * 6)
+    (send_dir / "b.bin").write_bytes(b"x" * 6)
+    with pytest.raises(g.Refused, match="25 MB"):
+        g.load_attachments([send_dir / "a.bin", send_dir / "b.bin"], [send_dir.resolve()])
+
+
+# ---------- the message
+
+
+def test_message_round_trips_attachment_bytes_exactly():
+    data = os.urandom(70_000)
+    raw = g.build_message(ME, ["a@x.com"], ["c@x.com"], "Report – Oct", "Hi\nthere", [("r.pdf", data)],
+                          html="<b>Hi</b>")
+    assert raw.split(b"\r\n\r\n", 1)[0].count(b"\n") == raw.split(b"\r\n\r\n", 1)[0].count(b"\r\n")  # CRLF headers
+    msg = email.message_from_bytes(raw, policy=email.policy.default)
+    assert msg["Bcc"] is None
+    assert msg["To"] == "a@x.com" and msg["Cc"] == "c@x.com" and msg["Subject"] == "Report – Oct"
+    assert msg.get_body(("plain",)).get_content().replace("\r\n", "\n").strip() == "Hi\nthere"
+    assert "<b>Hi</b>" in msg.get_body(("html",)).get_content()
+    (att,) = list(msg.iter_attachments())
+    assert att.get_filename() == "r.pdf" and att.get_content_type() == "application/pdf"
+    assert hashlib.sha256(att.get_content()).digest() == hashlib.sha256(data).digest()
+
+
+def test_subject_newline_cannot_inject_headers():
+    with pytest.raises(ValueError):
+        g.build_message(ME, ["a@x.com"], [], "x\nBcc: evil@y.com", "", [])
+
+
+# ---------- approval
+
+
+def test_reason_names_recipients_subject_files_and_cleans_text():
+    r = g.approval_reason(["a@x.com", "b@x.com"], "Q‮Report", [("r.pdf", b"x" * 2048)], "line1\n\x1b[31mline2" + "z" * 300)
+    assert r.startswith("send an email to a@x.com, b@x.com; subject \"Q Report\"; attaching r.pdf (2.0 KB)")
+    assert "\x1b" not in r and "‮" not in r and "line1 [31mline2" in r and r.endswith("…\"")
+
+
+def fake_helper(tmp_path, open_code=0, token="1//refresh"):
+    """A stand-in for the Secure Enclave helper: seal stores stdin, open prints it after logging the reason."""
+    h = g.approver_path()
+    h.parent.mkdir(parents=True, exist_ok=True)
+    log = tmp_path / "helper.log"
+    h.write_text(f"""#!/bin/sh
+printf '%s|%s\\n' "$1" "$3" >> '{log}'
+case "$1" in
+  seal) cat > "$2/token.sealed"; : > "$2/key.se" ;;
+  open) [ -f "$2/token.sealed" ] || exit 3; [ {open_code} -eq 0 ] && cat "$2/token.sealed"; exit {open_code} ;;
+esac
+""")
+    h.chmod(h.stat().st_mode | stat.S_IEXEC)
+    return log
+
+
+def test_seal_then_unlock_round_trip_passes_reason_as_one_argument(tmp_path, home):
+    log = fake_helper(tmp_path)
+    g.seal_token("1//secret-refresh")
+    assert g.signed_in()
+    assert g.unlock_token('send an email to a@x.com; subject "$(rm -rf ~)"') == "1//secret-refresh"
+    assert log.read_text().splitlines() == ["seal|", 'open|send an email to a@x.com; subject "$(rm -rf ~)"']
+
+
+def test_token_goes_to_the_helper_on_stdin_never_argv(home, tmp_path):
+    fake_helper(tmp_path)
+    seen = []
+
+    def run(args, **kw):
+        seen.append((args, kw.get("input")))
+        return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+
+    g.seal_token("1//0gSecret", run=run)
+    (args, stdin), = seen
+    assert args[1:] == ["seal", str(home)] and "1//0gSecret" not in " ".join(args) and stdin == b"1//0gSecret"
+
+
+@pytest.mark.parametrize("code,msg", [(1, "not approved"), (2, "isn't available"), (3, "not signed in")])
+def test_unlock_decline_unavailable_and_missing_refuse(tmp_path, home, code, msg):
+    fake_helper(tmp_path, open_code=code)
+    g.seal_token("1//r")
+    if code == 3:
+        g.forget_token()
+    with pytest.raises(g.Refused, match=msg):
+        g.unlock_token("x")
+
+
+def test_unlock_timeout_refuses(tmp_path, home, monkeypatch):
+    fake_helper(tmp_path)
+
+    def run(*a, **k):
+        raise subprocess.TimeoutExpired("helper", 1)
+
+    with pytest.raises(g.Refused, match="timed out"):
+        g.unlock_token("x", run=run)
+
+
+def test_nothing_works_without_the_helper(home):
+    for call in (lambda: g.unlock_token("x"), lambda: g.seal_token("t")):
+        with pytest.raises(g.Refused, match="helper isn't installed"):
+            call()
+
+
+# ---------- send flow
+
+
+class Calls:
+    def __init__(self):
+        self.reasons, self.posted = [], []
+
+    def token(self, reason):
+        self.reasons.append(reason)
+        return "tok"
+
+    def post(self, url, data, headers):
+        self.posted.append((url, data, headers))
+        return {"id": "m1", "labelIds": ["SENT"]}
+
+
+def test_send_to_self_still_needs_touch_id(send_dir):
+    (send_dir / "r.pdf").write_bytes(b"%PDF-1.4")
+    c, out = Calls(), []
+    g.send(["me"], [], "s", "t", [send_dir / "r.pdf"], post_raw=c.post, token=c.token, out=out.append)
+    assert c.reasons == ['send an email to you; subject "s"; attaching r.pdf (8 bytes); text "t"']
+    url, raw, headers = c.posted[0]
+    assert url == g.SEND_URL and headers == {"Authorization": "Bearer tok", "Content-Type": "message/rfc822"}
+    assert hashlib.sha256(b"%PDF-1.4").hexdigest() in out[0]
+
+
+def test_send_to_others_names_every_recipient(send_dir):
+    c = Calls()
+    g.send(["me"], ["x@y.com"], "s", "t", [], post_raw=c.post, token=c.token, out=lambda *_: None)
+    assert c.reasons[0].startswith("send an email to you, x@y.com;") and len(c.posted) == 1
+
+
+def test_declined_approval_sends_nothing(send_dir):
+    def decline(reason):
+        raise g.Refused("not approved")
+
+    c = Calls()
+    with pytest.raises(g.Refused):
+        g.send(["x@y.com"], [], "s", "t", [], post_raw=c.post, token=decline, out=lambda *_: None)
+    assert c.posted == []
+
+
+def test_draft_needs_touch_id_and_goes_to_drafts(send_dir):
+    (send_dir / "r.pdf").write_bytes(b"%PDF")
+    c, out = Calls(), []
+    g.send(["x@y.com"], ["z@y.com"], "s", "t", [send_dir / "r.pdf"], draft=True, post_raw=c.post, token=c.token, out=out.append)
+    assert c.reasons[0].startswith("save a draft email to x@y.com, z@y.com;")
+    assert [u for u, _, _ in c.posted] == [g.DRAFT_URL] and "Gmail Drafts" in out[-1]
+
+
+def test_dry_run_sends_nothing_and_asks_nothing(send_dir):
+    c = Calls()
+    g.send(["x@y.com"], [], "s", "t", [], dry_run=True, post_raw=c.post, token=c.token, out=lambda *_: None)
+    assert c.posted == [] and c.reasons == []
+
+
+def test_html_file_obeys_send_folders(tmp_path, send_dir):
+    (tmp_path / "body.html").write_text("<p>x</p>")
+    with pytest.raises(g.Refused, match="only from"):
+        g.send(["me"], [], "s", "t", [], html_file=tmp_path / "body.html", dry_run=True, out=lambda *_: None)
+
+
+def test_send_requires_sign_in_and_subject(home, send_dir):
+    with pytest.raises(g.Refused, match="subject"):
+        g.send(["me"], [], "  ", "t", [], dry_run=True, out=lambda *_: None)
+    g.write_private(home / "config.json", {})
+    with pytest.raises(g.Refused, match="not signed in"):
+        g.send(["a@x.com"], [], "s", "t", [], dry_run=True, out=lambda *_: None)
+
+
+# ---------- setup, tokens
+
+
+def test_setup_accepts_only_desktop_clients_and_stores_privately(tmp_path, home):
+    web = tmp_path / "web.json"
+    web.write_text(json.dumps({"web": {"client_id": "x"}}))
+    with pytest.raises(g.Refused, match="Desktop"):
+        g.setup(web)
+    desktop = tmp_path / "desktop.json"
+    desktop.write_text(json.dumps({"installed": {"client_id": "cid", "client_secret": "sec", "project_id": "p"}}))
+    g.setup(desktop)
+    stored = home / "client.json"
+    assert json.loads(stored.read_text()) == {"client_id": "cid", "client_secret": "sec"}
+    assert stat.S_IMODE(stored.stat().st_mode) == 0o600 and stat.S_IMODE(home.stat().st_mode) == 0o700
+
+
+def test_access_token_unlocks_once_with_the_reason(send_dir):
+    seen = []
+    post = lambda url, data, headers: seen.append(dict(urllib.parse.parse_qsl(data.decode()))) or {"access_token": "a1"}  # noqa: E731
+    assert g.access_token("why", post=post, unlock=lambda r: f"refresh-for:{r}") == "a1"
+    assert seen[0]["refresh_token"] == "refresh-for:why" and seen[0]["grant_type"] == "refresh_token"
+
+
+def test_expired_sign_in_says_log_in_again(send_dir):
+    def post(*a):
+        raise g.Refused("Google said HTTP 400: Token has been expired or revoked.")
+
+    with pytest.raises(g.Refused, match="gmail-send login"):
+        g.access_token("why", post=post, unlock=lambda r: "1//r")
+
+
+def test_logout_revokes_and_deletes(tmp_path, send_dir, home):
+    fake_helper(tmp_path)
+    g.seal_token("1//r")
+    revoked = []
+    assert g.logout(post=lambda url, data, h: revoked.append(data)) == ME
+    assert revoked == [b"token=1%2F%2Fr"] and not g.signed_in()
+    assert "account" not in json.loads((home / "config.json").read_text())
+
+
+def test_id_token_email_requires_verified():
+    assert g.id_token_email(id_token({"email": "Owner@Example.com", "email_verified": True})) == ME
+    with pytest.raises(g.Refused):
+        g.id_token_email(id_token({"email": ME, "email_verified": False}))
+
+
+# ---------- sign-in through the real loopback server
+
+
+def browser_that_returns(params_for):
+    """A stand-in browser: reads the auth URL and calls the loopback redirect like Google would."""
+    seen = {}
+
+    def open_browser(url):
+        q = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query))
+        seen.update(q)
+
+        def hit():
+            urllib.request.urlopen(q["redirect_uri"] + "/favicon.ico", timeout=5).read()
+            urllib.request.urlopen(q["redirect_uri"] + "/?" + urllib.parse.urlencode(params_for(q)), timeout=5).read()
+
+        threading.Thread(target=hit, daemon=True).start()
+
+    return open_browser, seen
+
+
+def token_endpoint(scope=g.COMPOSE_SCOPE + " openid", refresh="1//refresh"):
+    calls = []
+
+    def post(url, data, headers):
+        calls.append(dict(urllib.parse.parse_qsl(data.decode())))
+        tok = {"access_token": "a", "scope": scope, "id_token": id_token({"email": ME, "email_verified": True})}
+        if refresh:
+            tok["refresh_token"] = refresh
+        return tok
+
+    return post, calls
+
+
+def test_login_full_flow(tmp_path, send_dir, home):
+    fake_helper(tmp_path)
+    browser, seen = browser_that_returns(lambda q: {"code": "c1", "state": q["state"]})
+    post, calls = token_endpoint()
+    stored = {}
+    assert g.login(open_browser=browser, post=post, store=lambda t: stored.update({ME: t}), wait=20) == ME
+    assert seen["redirect_uri"].startswith("http://127.0.0.1:") and seen["code_challenge_method"] == "S256"
+    assert seen["scope"] == " ".join(g.SCOPES) and seen["access_type"] == "offline"
+    (ex,) = calls
+    assert ex["code"] == "c1" and ex["grant_type"] == "authorization_code"
+    assert base64.urlsafe_b64encode(hashlib.sha256(ex["code_verifier"].encode()).digest()).rstrip(b"=").decode() == seen["code_challenge"]
+    assert stored == {ME: "1//refresh"} and json.loads((home / "config.json").read_text())["account"] == ME
+
+
+def test_login_rejects_wrong_state(tmp_path, send_dir):
+    fake_helper(tmp_path)
+    browser, _ = browser_that_returns(lambda q: {"code": "c1", "state": "forged"})
+    post, calls = token_endpoint()
+    with pytest.raises(g.Refused, match="state"):
+        g.login(open_browser=browser, post=post, store=lambda *a: None, wait=20)
+    assert calls == []
+
+
+def test_login_reports_google_refusal(tmp_path, send_dir):
+    fake_helper(tmp_path)
+    browser, _ = browser_that_returns(lambda q: {"error": "access_denied", "state": q["state"]})
+    with pytest.raises(g.Refused, match="access_denied"):
+        g.login(open_browser=browser, post=lambda *a: pytest.fail("posted"), store=lambda *a: None, wait=20)
+
+
+@pytest.mark.parametrize("scope,refresh,msg", [
+    ("openid email", "1//r", "email permission"),
+    ("https://www.googleapis.com/auth/gmail.send openid", "1//r", "email permission"),
+    (g.COMPOSE_SCOPE, None, "lasting"),
+])
+def test_login_needs_send_scope_and_refresh_token(tmp_path, send_dir, scope, refresh, msg):
+    fake_helper(tmp_path)
+    browser, _ = browser_that_returns(lambda q: {"code": "c", "state": q["state"]})
+    post, _ = token_endpoint(scope=scope, refresh=refresh)
+    with pytest.raises(g.Refused, match=msg):
+        g.login(open_browser=browser, post=post, store=lambda *a: pytest.fail("stored"), wait=20)
+
+
+# ---------- the command
+
+
+def test_cli_dry_run_end_to_end(tmp_path, send_dir, home):
+    (send_dir / "r.pdf").write_bytes(b"%PDF")
+    env = dict(os.environ, GMAIL_SEND_HOME=str(home))
+    script = Path(g.__file__).with_name("gmail-send")
+    r = subprocess.run([sys.executable, str(script), "me", "-s", "Hi", "--file", str(send_dir / "r.pdf"), "--dry-run", "hello"],
+                       capture_output=True, text=True, env=env, cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert "To:       owner@example.com" in r.stdout and "Dry run: nothing sent or saved." in r.stdout
+    r = subprocess.run([sys.executable, str(script), "me", "-s", "Hi", "--file", "/etc/hosts", "--dry-run"],
+                       capture_output=True, text=True, env=env, cwd=tmp_path)
+    assert r.returncode == 1 and "attachments come only from" in r.stderr
+    r = subprocess.run([sys.executable, str(script), "me", "-s", "Hi", "--dry-run", "-"], input="from stdin\n",
+                       capture_output=True, text=True, env=env, cwd=tmp_path)
+    assert r.returncode == 0 and "  from stdin" in r.stdout

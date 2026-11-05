@@ -1,0 +1,74 @@
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.11"
+# ///
+"""Send mail with local attachments from any terminal, through the Gmail API.
+
+  gmail-send <to>[,<to>…] -s "<subject>" [--cc <addr>[,…]] [--file <path>]… [--html <file>] [--draft] [text… | -]
+  gmail-send setup <client_secret….json>   store your Desktop-app OAuth client (once per machine)
+  gmail-send login                         sign in to Google in the browser (send and drafts; no reading)
+  gmail-send status                        client, account, Touch ID helper, send folders
+  gmail-send logout                        revoke and delete the sign-in
+
+<to> and --cc take plain addresses, comma-separated; "me" is the signed-in address. Text is the remaining
+arguments, or stdin with "-". --html adds an HTML version read from a file (the text stays as the plain
+version; it comes from the same folders as attachments). --draft saves it to Gmail
+Drafts instead of sending (check and send it from Gmail). --dry-run prints what would be sent and stops.
+
+Every send and every draft, to anyone including yourself, waits for your Touch ID ("Gmail for Claude"), naming
+every recipient, the subject, each attachment and the start of the text: the Google sign-in is stored only
+locked to it. Attachments come only from
+~/Downloads, ~/Desktop, ~/Documents and ~/Pictures (no hidden files), 25 MB in total. ADR 2026-11-05-d38d84.
+"""
+import argparse
+import sys
+
+import gmailsend as g
+
+
+def send_args(argv):
+    p = argparse.ArgumentParser(prog="gmail-send", add_help=False)
+    p.add_argument("to")
+    p.add_argument("-s", "--subject", required=True)
+    p.add_argument("--cc", action="append", default=[])
+    p.add_argument("--file", action="append", default=[])
+    p.add_argument("--html")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--draft", action="store_true")
+    p.add_argument("text", nargs="*")
+    return p.parse_intermixed_args(argv)  # text may follow the options
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(__doc__.strip())
+        return 0 if argv else 2
+    cmd = argv[0]
+    try:
+        if cmd == "setup":
+            if len(argv) != 2:
+                raise g.Refused("usage: gmail-send setup <client_secret….json>")
+            cid = g.setup(argv[1])
+            print(f"Stored OAuth client …{cid[-40:]} in {g.HOME}/client.json. Next: gmail-send login")
+        elif cmd == "login":
+            print(f"Signed in as {g.login()}. The sign-in is locked to your Touch ID.")
+        elif cmd == "status":
+            print(g.status())
+        elif cmd == "logout":
+            who = g.logout()
+            print(f"Signed out {who}." if who else "Not signed in.")
+        else:
+            a = send_args(argv)
+            text = sys.stdin.read() if a.text == ["-"] else " ".join(a.text)
+            g.send([a.to], a.cc, a.subject, text, a.file, html_file=a.html, dry_run=a.dry_run, draft=a.draft)
+    except g.Refused as e:
+        print(f"gmail-send: {e}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("gmail-send: cancelled; nothing was sent", file=sys.stderr)
+        return 130
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

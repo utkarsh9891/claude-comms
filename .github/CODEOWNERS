@@ -13,6 +13,10 @@
 /plugins/whatsapp/wa/settings.json   @utkarsh9891
 /plugins/whatsapp/bin/wa             @utkarsh9891
 /plugins/whatsapp/bin/install.sh     @utkarsh9891
+# Gmail: the Touch ID lock, send folders and installer (security model § Gmail)
+/plugins/gmail/bin/gmailsend.py   @utkarsh9891
+/plugins/gmail/approve/           @utkarsh9891
+/plugins/gmail/bin/install.sh     @utkarsh9891
 # Repo policy and its documentation gate
 /scripts/check-docs.py              @utkarsh9891
 /.github/                            @utkarsh9891
