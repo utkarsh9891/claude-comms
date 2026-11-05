@@ -16,8 +16,9 @@ wants no background process and no extra step: one scan to arm, nothing per matc
 - `gmail-send --arm <to> [--cc …] -s "<subject pattern>" [--for 45m] [--times N] "<text pattern>"` asks for **one
   Touch ID scan** whose prompt shows the recipients, both patterns whole, the count, the window, what each slot may
   hold, and "no files, no HTML".
-- The scan mints Google's **one-hour access key**, stored with the pattern in `~/.gmail-send/armed.json` (0600,
-  under a file lock). **The sealed sign-in never leaves the lock**: only the short-lived key is stored, and Google
+- The scan mints Google's **one-hour access key, limited to `gmail.compose`** (send and drafts; it can't read the
+  inbox): the refresh asks for that subset of the sign-in's permissions, and arming refuses a key that comes back
+  broader. It is stored with the pattern in `~/.gmail-send/armed.json` (0600, under a file lock). **The sealed sign-in never leaves the lock**: only the short-lived key is stored, and Google
   ends it within the hour whatever happens to the file. The window is at most that hour (`--for`, default the
   key's life minus two minutes); longer means arming again.
 - A send uses an armed pattern only if it is a **new plain email** (no attachment, no HTML, not a draft, not a reply)
@@ -32,8 +33,10 @@ wants no background process and no extra step: one scan to arm, nothing per matc
 ## Assumptions
 - 1. Google's access keys for this client live one hour (`expires_in` 3599 s, 2026-11-05).
 - 2. The owner accepts that, while a pattern is armed, any process running as the owner could read the stored key
-     and send **any** mail as the owner until the key expires (at most an hour), not only mail that fits the
-     pattern (owner, 2026-11-05).
+     and send **any** mail (or manage drafts) as the owner until the key expires (at most an hour), not only mail
+     that fits the pattern; it can't read the inbox (owner, 2026-11-05).
+- 3. Google issues a key limited to a requested subset of the sign-in's scopes on refresh (checked on every arm:
+     a broader key is refused).
 
 ## Reversal triggers
 - Revisit if a longer window is needed: the only scan-free way is storing the full sign-in, which this ADR rejects.
