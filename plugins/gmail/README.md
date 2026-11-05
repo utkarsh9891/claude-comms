@@ -5,7 +5,8 @@ Decision: [ADR d38d84](../../docs/architecture/decisions/2026-11-05-d38d84-gmail
 Security: [Gmail threats](../../docs/architecture/security-model.md#gmail)
 
 `gmail-send` sends mail as you through the Gmail API, reading attachments straight from disk, so a file arrives
-byte-for-byte as it is. It sends, saves drafts and replies in a thread; it never reads a mail's body. **Every send and every draft, to
+byte-for-byte as it is. It sends, saves drafts and replies in a thread, quoting the original; it reads only the
+email you're answering (read other mail for context with a Gmail connector). **Every send and every draft, to
 anyone including yourself, needs your Touch ID**: the Google sign-in is stored only locked to it, so nothing on
 the Mac can send as you without a scan.
 
@@ -16,7 +17,8 @@ gmail-send a@example.com,b@example.com --cc c@example.com -s "Oct report" \
 gmail-send a@example.com -s "Oct report" --file ~/Downloads/report.pdf --draft "…"  # to Gmail Drafts; send it from Gmail
 gmail-send me -s "Formatted" --html ~/Documents/body.html "plain-text version"  # HTML with a text fallback
 echo "body from a pipe" | gmail-send me -s "Piped" -
-gmail-send --reply-to 1a1ab97a1a956b87 --all "Thanks, noted."                 # reply-all in the thread (two scans)
+gmail-send --reply-to 1a1ab97a1a956b87 --all "Thanks, noted."                 # reply-all in the thread, original quoted (two scans)
+gmail-send --reply-to 1a1ab97a1a956b87 --no-quote "Short and sweet."          # without the quoted original
 gmail-send --reply-to 1a1ab97a1a956b87 --file ~/Downloads/v2.pdf --draft "v2 attached"  # reply to the sender, as a draft
 gmail-send a@example.com -s "Check" --file ~/Desktop/x.pdf --dry-run "…"     # show what would be sent; send nothing
 ```
@@ -27,8 +29,9 @@ names every recipient ("you" for yourself), the subject, each attachment and the
 120 s timeout or a missing helper sends nothing.
 
 **Replies** (`--reply-to <Gmail message id>`, the id from the Gmail URL or the connector) stay in the original
-thread: `In-Reply-To`, `References` and the thread id are set from the original's headers, which `gmail-send`
-reads after its own Touch ID scan (headers only, never the body). It answers Reply-To or the sender (your own
+thread: `In-Reply-To`, `References` and the thread id are set from the original, which `gmail-send` reads after
+its own Touch ID scan. The original is **quoted below your text**, as Gmail does ("On … wrote:", folded behind
+"•••" in Gmail), unless `--no-quote`; the quoted text is never printed, only counted. It answers Reply-To or the sender (your own
 email: its To); `--all` adds everyone on the original except you; the subject is "Re: <original>". `--to`, `--cc`
 and `-s` replace those. The send then asks for a second scan naming the recipients
 ([ADR 847f76](../../docs/architecture/decisions/2026-11-05-847f76-gmail-replies-read-headers-behind-their-own-scan.md)).
@@ -46,7 +49,7 @@ Prereqs: `brew install uv`, and the Command Line Tools for `swiftc` (`xcode-sele
 2. **Create your OAuth client** (below) and run `gmail-send setup ~/Downloads/client_secret_….json`. The file is
    copied to `~/.gmail-send/client.json` (0600); delete the download afterwards.
 3. **Sign in:** `gmail-send login` opens Google in your browser; allow sending email, managing drafts and
-   viewing email headers (for replies). If replies say to sign in again, your sign-in predates replies. The
+   reading email (used only to reply to one). If replies say to sign in again, your sign-in predates this. The
    lasting sign-in is stored only encrypted to a Secure Enclave key that needs your Touch ID for every use.
 4. **Check:** `gmail-send me -s "Test" --file ~/Downloads/<some file> "hello"` (one Touch ID prompt).
 5. **Close other ways to send:** if a hosted Gmail connector is connected, deny its send, reply, forward and
@@ -75,9 +78,9 @@ admin to allow this client, or use the hosted Gmail connector for text-only mail
 | Command | What it does |
 |---|---|
 | `gmail-send <to> -s <subject> [--cc …] [--file …]… [--html <file>] [--draft] [--dry-run] [text… \| -]` | send (or save a draft); `me` is your address; addresses are plain and comma-separated |
-| `gmail-send --reply-to <id> [--all] [--to …] [--cc …] [-s …] [--file …]… [--html …] [--draft] [--dry-run] [text…]` | reply in the original's thread (two scans: read headers, then send) |
+| `gmail-send --reply-to <id> [--all] [--no-quote] [--to …] [--cc …] [-s …] [--file …]… [--html …] [--draft] [--dry-run] [text…]` | reply in the original's thread, quoting it (two scans: read it, then send) |
 | `gmail-send setup <client_secret….json>` | store your Desktop-app client (rejects other client types) |
-| `gmail-send login` | Google sign-in in the browser (send, drafts, headers for replies; no bodies); locks the sign-in to Touch ID |
+| `gmail-send login` | Google sign-in in the browser (send, drafts; read an email only to reply to it); locks the sign-in to Touch ID |
 | `gmail-send status` | client, signed-in account, Touch ID helper, send folders |
 | `gmail-send logout` | revoke the sign-in at Google (one scan) and delete it here |
 | `bin/install.sh [install\|status\|approve-test\|uninstall]` | build and link; show state; one test prompt; remove the app |

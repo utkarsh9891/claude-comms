@@ -6,10 +6,11 @@ Notable changes per plugin version (`plugins/<plugin>/.claude-plugin/plugin.json
 ## gmail 0.2.0 — 2026-11-05
 
 - **Replies in a thread:** `gmail-send --reply-to <message id> [--all]` answers in the original's thread
-  (`In-Reply-To`, `References`, thread id), to its sender or with `--all` to everyone on it, subject "Re: …".
-  It reads only the original's headers, after its own Touch ID scan, then asks again to send
+  (`In-Reply-To`, `References`, thread id), to its sender or with `--all` to everyone on it, subject "Re: …",
+  with the original **quoted below**, as Gmail does (`--no-quote` to leave it out; the quoted text is never
+  printed). It reads only that email, after its own Touch ID scan, then asks again to send
   ([ADR 847f76](./docs/architecture/decisions/2026-11-05-847f76-gmail-replies-read-headers-behind-their-own-scan.md)).
-  Run `gmail-send login` once more to allow reading headers.
+  Run `gmail-send login` once more to allow reading the email you reply to.
 
 ## gmail 0.1.0 — 2026-11-05
 
