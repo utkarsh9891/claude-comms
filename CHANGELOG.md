@@ -2,6 +2,13 @@
 
 Notable changes per plugin version (`plugins/whatsapp/.claude-plugin/plugin.json`). Back to [AGENTS.md](./AGENTS.md).
 
+## 0.10.1 — 2026-11-05
+
+- **Repo renamed to claude-comms** ([ADR 2d0dd3](./docs/architecture/decisions/2026-11-05-2d0dd3-rename-repo-to-claude-comms.md)):
+  install as `whatsapp@claude-comms`. An existing install moves over with the
+  [runbook](./docs/operations/runbook.md#moving-from-whatsapp-claude-to-claude-comms) steps; pairing, allowlist,
+  data and the `com.whatsapp-claude.bridge` service are kept.
+
 ## 0.10.0 — 2026-10-30
 
 - **Find chats by contact name, number or part of a name:** `wa-send` and `wa-allow` take a saved contact's name,

@@ -10,7 +10,7 @@ Back to [contributing](./README.md). Decision: [ADR 2026-10-23-aa4dba](../archit
 - **Merge commits only.** Squash and rebase merges are disabled; the branch's commits stay in history. Branches are
   deleted after merge.
 - **Branch names:** `<type>/<slug>`, type one of `feat`, `fix`, `docs`, `ci`, `chore`, `refactor`.
-- **Worktrees.** Work in a linked worktree (`git worktree add ../whatsapp-claude-wt -b <branch> origin/main`), keep
+- **Worktrees.** Work in a linked worktree (`git worktree add ../claude-comms-wt -b <branch> origin/main`), keep
   the main checkout clean, remove the worktree after merge.
 - **Release tags** `v<plugin version>` are created by the admin only.
 - **Outside contributors** fork and open a PR; their CI runs wait for the owner's approval.

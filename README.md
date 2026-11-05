@@ -1,6 +1,9 @@
-# whatsapp-claude
+# claude-comms
 
-Read, triage and reply to WhatsApp from Claude Code, safely: only the chats you allowlist, in a dedicated
+Claude Code plugins for your messaging channels, one plugin per channel
+([ADR 2d0dd3](./docs/architecture/decisions/2026-11-05-2d0dd3-rename-repo-to-claude-comms.md)).
+
+**WhatsApp** (`whatsapp` plugin): read, triage and reply to WhatsApp from Claude Code, safely: only the chats you allowlist, in a dedicated
 session, with a hard block on permission-bypass mode.
 
 **Start at [`AGENTS.md`](./AGENTS.md)**, the map of every document in this repo.
@@ -17,8 +20,8 @@ session, with a hard block on permission-bypass mode.
 Prereqs (macOS): `brew install go uv`.
 
 ```text
-/plugin marketplace add utkarsh9891/whatsapp-claude
-/plugin install whatsapp@whatsapp-claude
+/plugin marketplace add utkarsh9891/claude-comms
+/plugin install whatsapp@claude-comms
 /wa-setup 91XXXXXXXXXX          # your number with country code → an 8-character pairing code
 ```
 

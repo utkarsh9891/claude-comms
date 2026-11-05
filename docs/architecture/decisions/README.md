@@ -38,3 +38,4 @@ agent) knows *why* this repo is the way it is and *when* a decision should be re
 | [2026-10-27-fc6f0e](./2026-10-27-fc6f0e-commands-through-notification-chats.md) | `#wa` commands also travel through notification chats, keeping the self-chat clean | bridge | accepted |
 | [2026-10-30-032c66](./2026-10-30-032c66-armed-sends-approve-a-pattern-ahead.md) | Armed sends: approve a message pattern with Touch ID ahead of time | bridge | accepted |
 | [2026-10-30-7e2c9d](./2026-10-30-7e2c9d-chat-discovery-contact-names-and-partial-match.md) | Find chats by contact name, number or part of a name | bridge | accepted |
+| [2026-11-05-2d0dd3](./2026-11-05-2d0dd3-rename-repo-to-claude-comms.md) | Rename the repo to claude-comms; one plugin per channel | repo | accepted |
