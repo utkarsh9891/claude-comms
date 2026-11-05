@@ -57,6 +57,7 @@ do_install() {
   service_loaded && was_running=true
 
   rm -rf "$APP.new"
+  mkdir -p "$APP.new"
   say "building Touch ID helper…"
   build_helper "$APP.new/WhatsApp for Claude"
   say "building bridge…"

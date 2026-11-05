@@ -43,6 +43,11 @@ Notable changes per plugin version (`plugins/<plugin>/.claude-plugin/plugin.json
   `~/Downloads`, `~/Desktop`, `~/Documents` and `~/Pictures`. Set up with `/gmail-setup`
   ([plugin README](./plugins/gmail/README.md)).
 
+## 0.10.4 — 2026-11-05
+
+- Fix 0.10.3: the installer creates its staging folder before building the Touch ID helper (0.10.3 built the
+  helper first, into a folder that didn't exist yet, so every install failed).
+
 ## 0.10.3 — 2026-11-05
 
 - The installer also builds the bridge against the older SDK when it had to fall back for the Touch ID helper:
