@@ -28,6 +28,25 @@ need() {
   xcrun --find swiftc >/dev/null 2>&1 || die "missing: swiftc (xcode-select --install)"
 }
 
+# Command Line Tools can ship an SDK newer than their compiler ("this SDK is not supported by the compiler"); then
+# try each installed macOS SDK, newest first. The helper's source and behaviour are unchanged (threat T4).
+build_helper() {
+  local out="$1" src="$PLUGIN_ROOT/approve/wa-approve.swift" sdk log dev
+  log="$(mktemp)"
+  if xcrun swiftc -O -o "$out" "$src" 2>"$log"; then rm -f "$log"; return 0; fi
+  dev="$(xcode-select -p)"
+  while IFS= read -r sdk; do
+    if xcrun swiftc -O -sdk "$sdk" -o "$out" "$src" 2>>"$log"; then
+      say "built the Touch ID helper against $(basename "$sdk") (the default SDK doesn't match this compiler)"
+      rm -f "$log"
+      return 0
+    fi
+  done < <(find "$dev/SDKs" "$dev/Platforms/MacOSX.platform/Developer/SDKs" -maxdepth 1 -name 'MacOSX[0-9]*.sdk' 2>/dev/null | sort -rV)
+  cat "$log" >&2
+  rm -f "$log"
+  die "couldn't build the Touch ID helper with any installed SDK (update the Command Line Tools)"
+}
+
 do_install() {
   need
   mkdir -p "$WA_HOME" "$BIN_DIR" && chmod 700 "$WA_HOME"
@@ -38,7 +57,7 @@ do_install() {
   say "building bridge…"
   (cd "$PLUGIN_ROOT/bridge" && go build -o "$APP.new/whatsapp-bridge" .)
   say "building Touch ID helper…"
-  xcrun swiftc -O -o "$APP.new/WhatsApp for Claude" "$PLUGIN_ROOT/approve/wa-approve.swift"
+  build_helper "$APP.new/WhatsApp for Claude"
   say "installing MCP server…"
   cp -R "$PLUGIN_ROOT/server" "$APP.new/server"
   rm -rf "$APP.new/server/.venv" "$APP.new/server/tests"
