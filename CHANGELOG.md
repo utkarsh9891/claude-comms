@@ -3,6 +3,25 @@
 Notable changes per plugin version (`plugins/<plugin>/.claude-plugin/plugin.json`); unprefixed headings are the
 `whatsapp` plugin. Back to [AGENTS.md](./AGENTS.md).
 
+## gmail 0.2.0 — 2026-11-05
+
+- **Replies in a thread:** `gmail-send --reply-to <message id> [--all]` answers in the original's thread
+  (`In-Reply-To`, `References`, thread id), to its sender or with `--all` to everyone on it, subject "Re: …",
+  with the original **quoted below**, as Gmail does (`--no-quote` to leave it out; the quoted text is never
+  printed). One Touch ID scan reads that email and sends; `--dry-run` lists the recipients first
+  ([ADR 847f76](./docs/architecture/decisions/2026-11-05-847f76-gmail-replies-read-headers-behind-their-own-scan.md)).
+  Run `gmail-send login` once more to allow reading the email you reply to.
+- **Your signature** is saved from Gmail at sign-in to `~/.gmail-send/signature.html` (editable;
+  `gmail-send signature --refresh` fetches it again) and added to every send, reply and draft, under your text
+  and above any quote, as Gmail does; `--no-signature` leaves it out.
+- `--html -` reads the HTML version from stdin, so no file is needed.
+- New guide: [Set up Gmail for Claude on a Mac](./docs/guides/gmail-setup-with-claude.md), written to hand to Claude:
+  plugin, connector and deny rules, the OAuth client with links and console search terms, sign-in, signature, tests,
+  troubleshooting.
+- New guide: [the connector reads, `gmail-send` sends](./docs/guides/gmail-connector-and-gmail-send.md): how the
+  two tools work together, the deny rules on the connector's sending tools, and the setup cost.
+- `gmail-send logout` no longer asks for Touch ID: it deletes the sealed sign-in and its key from the Mac.
+
 ## gmail 0.1.0 — 2026-11-05
 
 - **New plugin, `gmail-send`** ([ADR d38d84](./docs/architecture/decisions/2026-11-05-d38d84-gmail-send-through-the-gmail-api.md)):

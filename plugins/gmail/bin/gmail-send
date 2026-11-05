@@ -4,21 +4,31 @@
 # ///
 """Send mail with local attachments from any terminal, through the Gmail API.
 
-  gmail-send <to>[,<to>…] -s "<subject>" [--cc <addr>[,…]] [--file <path>]… [--html <file>] [--draft] [text… | -]
+  gmail-send <to>[,<to>…] -s "<subject>" [--cc <addr>[,…]] [--file <path>]… [--html <file>] [--draft] [--no-signature] [text… | -]
+  gmail-send --reply-to <message id> [--all] [--no-quote] [--to …] [--cc …] [-s …] [--file …] [--html …] [--draft] [text… | -]
   gmail-send setup <client_secret….json>   store your Desktop-app OAuth client (once per machine)
-  gmail-send login                         sign in to Google in the browser (send and drafts; no reading)
+  gmail-send login                         sign in to Google (send, drafts; read an email only to reply to it)
   gmail-send status                        client, account, Touch ID helper, send folders
-  gmail-send logout                        revoke and delete the sign-in
+  gmail-send logout                        delete the sign-in from this Mac (no Touch ID)
+  gmail-send signature [--refresh]         show the saved signature, or fetch Gmail's again (one scan)
+
+--reply-to answers a Gmail message in its thread (id from the Gmail URL or the connector): to its sender, or with
+--all to everyone on it except you; subject "Re: <original>" unless -s; --to/--cc replace the recipients. The
+original is quoted below your text, as Gmail does, unless --no-quote. It reads that one email and sends in the same
+single Touch ID scan; the quoted text is never printed. --dry-run shows the recipients found first.
 
 <to> and --cc take plain addresses, comma-separated; "me" is the signed-in address. Text is the remaining
-arguments, or stdin with "-". --html adds an HTML version read from a file (the text stays as the plain
-version; it comes from the same folders as attachments). --draft saves it to Gmail
+arguments, or stdin with "-". --html adds an HTML version from a file in the send folders, or from stdin
+with `--html -` (then the text comes from the arguments); the text stays as the plain version. --draft saves it to Gmail
 Drafts instead of sending (check and send it from Gmail). --dry-run prints what would be sent and stops.
+Your signature (~/.gmail-send/signature.html, saved from Gmail at login; edit freely) is added under your text,
+above any quote, unless --no-signature.
 
-Every send and every draft, to anyone including yourself, waits for your Touch ID ("Gmail for Claude"), naming
-every recipient, the subject, each attachment and the start of the text: the Google sign-in is stored only
-locked to it. Attachments come only from
-~/Downloads, ~/Desktop, ~/Documents and ~/Pictures (no hidden files), 25 MB in total. ADR 2026-11-05-d38d84.
+Every send, draft and reply, to anyone including yourself, waits for one Touch ID scan ("Gmail for Claude"):
+the Google sign-in is stored only locked to it. The prompt names every recipient, the subject, each attachment
+and the start of the text; for a reply, the email and "its sender" or "everyone on it" (names you give with
+--to/--cc are listed). Attachments come only from ~/Downloads, ~/Desktop, ~/Documents and ~/Pictures (no hidden
+files), 25 MB in total. ADRs 2026-11-05-d38d84, 2026-11-05-847f76.
 """
 import argparse
 import sys
@@ -27,13 +37,23 @@ import gmailsend as g
 
 
 def send_args(argv):
+    replying = any(a == "--reply-to" or a.startswith("--reply-to=") for a in argv)
     p = argparse.ArgumentParser(prog="gmail-send", add_help=False)
-    p.add_argument("to")
-    p.add_argument("-s", "--subject", required=True)
+    if replying:  # recipients come from the original unless --to/--cc say otherwise; every positional is text
+        p.add_argument("--to", action="append", default=[])
+        p.add_argument("--reply-to", required=True)
+        p.add_argument("--all", action="store_true")
+        p.add_argument("--no-quote", action="store_true")
+        p.add_argument("-s", "--subject")
+    else:
+        p.add_argument("to")
+        p.add_argument("--all", action="store_true")
+        p.add_argument("-s", "--subject", required=True)
     p.add_argument("--cc", action="append", default=[])
     p.add_argument("--file", action="append", default=[])
     p.add_argument("--html")
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--no-signature", action="store_true")
     p.add_argument("--draft", action="store_true")
     p.add_argument("text", nargs="*")
     return p.parse_intermixed_args(argv)  # text may follow the options
@@ -56,11 +76,29 @@ def main(argv):
             print(g.status())
         elif cmd == "logout":
             who = g.logout()
-            print(f"Signed out {who}." if who else "Not signed in.")
+            print(f"Signed out {who}: the sealed sign-in and its key are deleted from this Mac. To also remove "
+                  f"the app's access at Google: {g.REVOKE_PAGE}" if who else "Not signed in.")
+        elif cmd == "signature":
+            if argv[1:] == ["--refresh"]:
+                sig = g.refresh_signature()
+                print(f"Saved {'your Gmail signature' if sig else 'an empty signature (none set in Gmail)'} "
+                      f"to {g.signature_path()}.")
+            elif len(argv) == 1:
+                sig = g.load_signature()
+                print(f"{g.signature_path()}:\n{sig}" if sig else f"No signature ({g.signature_path()} missing or empty).")
+            else:
+                raise g.Refused("usage: gmail-send signature [--refresh]")
         else:
             a = send_args(argv)
+            if a.html == "-" and a.text == ["-"]:
+                raise g.Refused("stdin can carry the HTML or the text, not both: give the text as arguments")
+            html_text = sys.stdin.read() if a.html == "-" else None
             text = sys.stdin.read() if a.text == ["-"] else " ".join(a.text)
-            g.send([a.to], a.cc, a.subject, text, a.file, html_file=a.html, dry_run=a.dry_run, draft=a.draft)
+            to = a.to if isinstance(a.to, list) else [a.to]
+            g.send(to, a.cc, a.subject, text, a.file, html_file=None if a.html == "-" else a.html,
+                   html_text=html_text, dry_run=a.dry_run, draft=a.draft,
+                   reply_to=getattr(a, "reply_to", None), reply_all=a.all,
+                   quote=not getattr(a, "no_quote", False), signature=not a.no_signature)
     except g.Refused as e:
         print(f"gmail-send: {e}", file=sys.stderr)
         return 1

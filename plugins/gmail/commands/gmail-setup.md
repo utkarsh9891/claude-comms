@@ -13,11 +13,14 @@ Set up gmail-send with the plugin's installer at `${CLAUDE_PLUGIN_ROOT}/bin/inst
    `gmail-send setup <path>`. If there is none, walk the user through creating one with the steps in
    `${CLAUDE_PLUGIN_ROOT}/README.md` ("Create your OAuth client") and stop.
 4. If `signed in:` says no: tell the user a Google sign-in page is about to open and to allow sending email and
-   managing drafts, then run `gmail-send login` in the background and wait for it to finish; report the account.
+   managing drafts and reading email (used only to reply to one), then run
+   `gmail-send login` in the background and wait for it to finish; report the account.
 5. Tell the user a Touch ID prompt is coming (nothing is sent or unlocked), run
    `${CLAUDE_PLUGIN_ROOT}/bin/install.sh approve-test`, and report the result.
 6. Run `install.sh status` again and report it, then the usage:
-   `gmail-send <to> -s "<subject>" [--cc <addr>] [--html <file>] --file <path> [--draft] "<text>"`; `me` is your
+   `gmail-send <to> -s "<subject>" [--cc <addr>] [--html <file>] --file <path> [--draft] "<text>"`, and replies
+   `gmail-send --reply-to <message id> [--all] [--no-quote] [--draft] "<text>"` (one scan; quotes the original);
+   `me` is your
    own address; every send and draft asks for Touch ID; attachments come only from ~/Downloads, ~/Desktop,
    ~/Documents and ~/Pictures.
 7. If a hosted Gmail connector is connected, tell the user it can still send without Touch ID and offer to deny

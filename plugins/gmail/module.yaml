@@ -3,20 +3,22 @@ id: gmail
 type: plugin
 purpose: >
   Claude Code plugin that installs gmail-send: send email with local attachments from any terminal through the
-  Gmail API (or save a draft), signed in with the owner's own Desktop-app OAuth client (gmail.compose + openid +
-  email; no reading). The refresh token is stored only encrypted to a Secure Enclave key that needs Touch ID for
+  Gmail API (or save a draft, or reply in a thread quoting the original), signed in with the owner's own
+  Desktop-app OAuth client (gmail.compose + gmail.readonly + openid + email; reads only the email being answered). The refresh token is stored only encrypted to a Secure Enclave key that needs Touch ID for
   every use (the Gmail for Claude helper), so every send and draft needs a scan; attachments come only from the
   send folders. No bridge, no session, nothing
-  shared with the WhatsApp plugin at runtime. Decision: ADR 2026-11-05-d38d84.
+  shared with the WhatsApp plugin at runtime. Decisions: ADR 2026-11-05-d38d84, ADR 2026-11-05-847f76.
 consumes: []            # Python standard library only, run by uv
 language: python
 runtime:
   python: ">=3.11"
-data_dir: "$GMAIL_SEND_HOME (default ~/.gmail-send): client.json, config.json, token.sealed, key.se (0600), app/"
+data_dir: "$GMAIL_SEND_HOME (default ~/.gmail-send): client.json, config.json, signature.html, token.sealed, key.se (0600), app/"
 secrets: "refresh token sealed to a Touch ID-only Secure Enclave key (token.sealed + key.se)"
 interfaces:
   - "gmail-send <to> -s <subject> [--cc …] [--file …] [--html <file>] [--draft] [--dry-run] [text… | -]"
-  - "gmail-send setup <client_secret.json> | login | status | logout"
+  - "gmail-send --reply-to <message id> [--all] [--no-quote] [--to …] [--cc …] [-s …] [--draft] [--dry-run] [text…]"
+  - "gmail-send setup <client_secret.json> | login | status | logout | signature [--refresh]"
+  - "GET https://gmail.googleapis.com/gmail/v1/users/me/messages/<id>?format=raw (replies; format=metadata with --no-quote)"
   - "POST https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=media (message/rfc822)"
   - "POST https://gmail.googleapis.com/upload/gmail/v1/users/me/drafts?uploadType=media (message/rfc822)"
   - "runs ~/.gmail-send/app/Gmail for Claude seal <dir> (token on stdin) | open <dir> <reason> (Touch ID, token on stdout) | test <reason>"
@@ -30,6 +32,7 @@ guard_files:            # CODEOWNERS-protected; see docs/architecture/security-m
 docs:
   readme: ./README.md
   design: ../../docs/architecture/decisions/2026-11-05-d38d84-gmail-send-through-the-gmail-api.md
+  design_replies: ../../docs/architecture/decisions/2026-11-05-847f76-gmail-replies-read-headers-behind-their-own-scan.md
   security: ../../docs/architecture/security-model.md#gmail
 commands:
   test: "uv run --no-project --with pytest python -m pytest tests -q && shellcheck bin/install.sh"

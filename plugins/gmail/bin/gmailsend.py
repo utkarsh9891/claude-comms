@@ -7,6 +7,10 @@ helper), so every send and every draft, to anyone, needs a scan.
 """
 import base64
 import email.policy
+import email.utils
+import html as htmllib
+from datetime import datetime
+from html.parser import HTMLParser
 import hashlib
 import http.server
 import json
@@ -26,14 +30,23 @@ from email.utils import formatdate, make_msgid
 from pathlib import Path
 
 HOME = Path(os.environ.get("GMAIL_SEND_HOME") or Path.home() / ".gmail-send")
-# gmail.compose sends and creates drafts (gmail.send alone cannot); neither reads the inbox
-SCOPES = ("https://www.googleapis.com/auth/gmail.compose", "openid", "email")
-COMPOSE_SCOPE = SCOPES[0]
+# gmail.compose sends and creates drafts (gmail.send alone cannot). gmail.readonly reads the one email being
+# replied to: its headers to thread, its body to quote. (Not gmail.metadata: with it in the sign-in, Gmail refuses
+# full messages even when gmail.readonly is granted too.)
+SCOPES = ("https://www.googleapis.com/auth/gmail.compose", "https://www.googleapis.com/auth/gmail.readonly",
+          "openid", "email")
+COMPOSE_SCOPE, READ_SCOPE = SCOPES[0], SCOPES[1]
+METADATA_SCOPE = "https://www.googleapis.com/auth/gmail.metadata"  # sign-ins from 0.2.0: headers only, no quoting
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 SEND_URL = "https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=media"
 DRAFT_URL = "https://gmail.googleapis.com/upload/gmail/v1/users/me/drafts?uploadType=media"
+META_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/{id}?format=metadata"
+RAW_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/{id}?format=raw"
+SENDAS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs/{email}"
+REPLY_HEADERS = ("Message-ID", "References", "Subject", "From", "Reply-To", "To", "Cc")
+GMAIL_ID = re.compile(r"^[0-9a-f]{10,24}$")
 MAX_ATTACH = 25 * 1024 * 1024
 DEFAULT_SEND_FROM = ("~/Downloads", "~/Desktop", "~/Documents", "~/Pictures")
 APPROVE_TIMEOUT = 120  # seconds the Touch ID prompt waits before gmail-send gives up
@@ -160,6 +173,26 @@ def http_json(url, data, headers, opener=urllib.request.urlopen):
         raise Refused(f"can't reach Google: {e.reason}") from None
 
 
+def multipart(meta, raw):
+    """Upload body carrying JSON metadata (the threadId) and the message, for uploadType=multipart."""
+    boundary = "gmail-send-" + secrets.token_hex(12)
+    body = (f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{json.dumps(meta)}\r\n"
+            f"--{boundary}\r\nContent-Type: message/rfc822\r\n\r\n").encode() + raw + f"\r\n--{boundary}--\r\n".encode()
+    return body, f"multipart/related; boundary={boundary}"
+
+
+def http_get_json(url, headers, opener=urllib.request.urlopen):
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with opener(req, timeout=60) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        raise Refused(f"Google said HTTP {e.code} reading the original email: "
+                      f"{e.read().decode(errors='replace')[:200]}") from None
+    except urllib.error.URLError as e:
+        raise Refused(f"can't reach Google: {e.reason}") from None
+
+
 def form(d):
     return urllib.parse.urlencode(d).encode()
 
@@ -210,7 +243,8 @@ def wait_for_redirect(server, deadline):
     return got
 
 
-def login(open_browser=webbrowser.open, post=http_json, store=seal_token, wait=600):
+def login(open_browser=webbrowser.open, post=http_json, store=seal_token, wait=600, get=None):
+    get = get or http_get_json
     client = load_client()
     helper()  # fail before the browser if the lock can't be used
     verifier = b64url(secrets.token_bytes(32))
@@ -244,8 +278,11 @@ def login(open_browser=webbrowser.open, post=http_json, store=seal_token, wait=6
         raise Refused("Google issued no lasting sign-in (refresh token); run `gmail-send login` again")
     account = id_token_email(tok.get("id_token", ""))
     store(tok["refresh_token"])
+    if READ_SCOPE in tok.get("scope", "").split():  # the fresh token can read it: no scan needed
+        save_signature(fetch_signature(account, tok["access_token"], get=get))
     cfg = load_config()
     cfg["account"] = account
+    cfg["scopes"] = sorted(tok.get("scope", "").split())
     write_private(HOME / "config.json", cfg)
     return account
 
@@ -265,17 +302,18 @@ def access_token(reason, post=http_json, unlock=unlock_token):
     return tok["access_token"]
 
 
-def logout(post=http_json, unlock=unlock_token):
-    """Revoke at Google (one Touch ID scan; declining still signs out here) and delete the sealed sign-in."""
+REVOKE_PAGE = "https://myaccount.google.com/connections"
+
+
+def logout():
+    """Delete the sealed sign-in and its Secure Enclave key: no scan, since nothing is sent or read. Without the
+    key the sealed copy can never be opened again. Revoking at Google too would need the sign-in (a scan), so the
+    owner does that on Google's page if they want to."""
     cfg = load_config()
     account = cfg.pop("account", None)
+    cfg.pop("scopes", None)
     if not account and not signed_in():
         return None
-    if signed_in():
-        try:
-            post(REVOKE_URL, form({"token": unlock("sign out of gmail-send and revoke its Google access")}), FORM)
-        except Refused:
-            pass  # deleting it here is what matters; revoke later at myaccount.google.com/permissions
     forget_token()
     write_private(HOME / "config.json", cfg)
     return account or "(unknown account)"
@@ -348,7 +386,7 @@ def clean(text, limit):
     return t if len(t) <= limit else t[: limit - 1] + "…"
 
 
-def build_message(me, to, cc, subject, text, attachments, html=None):
+def build_message(me, to, cc, subject, text, attachments, html=None, in_reply_to=None, references=None):
     msg = EmailMessage()
     msg["From"] = me
     msg["To"] = ", ".join(to)
@@ -357,6 +395,9 @@ def build_message(me, to, cc, subject, text, attachments, html=None):
     msg["Subject"] = subject
     msg["Date"] = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid(domain=me.split("@", 1)[1])
+    if in_reply_to:
+        msg["In-Reply-To"] = in_reply_to
+        msg["References"] = references or in_reply_to
     msg.set_content(text or "")
     if html:
         msg.add_alternative(html, subtype="html")
@@ -367,11 +408,185 @@ def build_message(me, to, cc, subject, text, attachments, html=None):
     return msg.as_bytes(policy=email.policy.SMTP)
 
 
-def approval_reason(recipients, subject, attachments, text, html=None, me=None, draft=False):
-    """What macOS shows after "Gmail for Claude is trying to …"."""
-    who = ", ".join("you" if me and r.lower() == me.lower() else r for r in recipients)
-    verb = "save a draft email to " if draft else "send an email to "
-    parts = [verb + who, f'subject "{clean(subject, 80)}"']
+class _Text(HTMLParser):
+    """Plain text of an HTML body, for quoting an email that has no text version."""
+    def __init__(self):
+        super().__init__()
+        self.out, self.skip = [], 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("script", "style"):
+            self.skip += 1
+        elif tag in ("br", "p", "div", "tr", "li", "h1", "h2", "h3", "blockquote"):
+            self.out.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style") and self.skip:
+            self.skip -= 1
+
+    def handle_data(self, data):
+        if not self.skip:
+            self.out.append(data)
+
+
+def html_to_text(html):
+    p = _Text()
+    p.feed(html)
+    return re.sub(r"\n{3,}", "\n\n", "".join(p.out)).strip()
+
+
+def lookup_original(msg_id, bearer, get=http_get_json, quote=True):
+    """The email being replied to: headers to thread, and (quote=True) its text and HTML bodies to quote.
+    Body text is someone else's: it goes into the reply as written and is never printed."""
+    if not GMAIL_ID.match(msg_id or ""):
+        raise Refused(f"not a Gmail message id: {msg_id!r} (16 hex characters, from the Gmail URL or connector)")
+    auth = {"Authorization": f"Bearer {bearer}"}
+    body_text = body_html = None
+    if quote:
+        m = get(RAW_URL.format(id=msg_id), auth)
+        try:
+            parsed = email.message_from_bytes(base64.urlsafe_b64decode(m["raw"] + "=" * (-len(m["raw"]) % 4)),
+                                              policy=email.policy.default)
+        except (KeyError, ValueError, TypeError):
+            raise Refused(f"couldn't read message {msg_id} to quote it") from None
+        h = {k.lower(): str(v) for k, v in reversed(list(parsed.items()))}
+        for kind in ("plain", "html"):
+            part = parsed.get_body((kind,))
+            if part is not None:
+                try:
+                    content = part.get_content()
+                except (LookupError, ValueError):
+                    content = part.get_payload(decode=True).decode("utf-8", "replace")
+                if kind == "plain":
+                    body_text = content
+                else:
+                    body_html = content
+        if body_text is None and body_html is not None:
+            body_text = html_to_text(body_html)
+    else:
+        url = META_URL.format(id=msg_id) + "".join(f"&metadataHeaders={h}" for h in REPLY_HEADERS)
+        m = get(url, auth)
+        h = {}
+        for item in m.get("payload", {}).get("headers", []):
+            h.setdefault(item.get("name", "").lower(), item.get("value", ""))
+    if not h.get("message-id") or not m.get("threadId"):
+        raise Refused(f"message {msg_id} has no Message-ID or thread; can't reply in its thread")
+    addrs = lambda name: [a for _, a in email.utils.getaddresses([h.get(name, "")]) if ADDRESS.match(a)]  # noqa: E731
+    return {"id": msg_id, "thread": m["threadId"], "message_id": h["message-id"].strip(),
+            "references": " ".join((h.get("references", "") + " " + h["message-id"]).split()),
+            "subject": h.get("subject", ""), "from": addrs("from"), "reply_to": addrs("reply-to"),
+            "to": addrs("to"), "cc": addrs("cc"), "from_display": clean(h.get("from", ""), 200),
+            "date": h.get("date", ""), "text": body_text, "html": body_html}
+
+
+def quote_line(orig):
+    """Gmail's attribution line: "On Thu, 5 Nov 2026 at 17:26, Name <a@b> wrote:"."""
+    try:
+        when = email.utils.parsedate_to_datetime(orig["date"]).astimezone()
+        stamp = f"{when:%a}, {when.day} {when:%b %Y} at {when:%H:%M}"
+    except (TypeError, ValueError, IndexError):
+        stamp = clean(orig["date"], 60) or "an earlier date"
+    return f"On {stamp}, {orig['from_display'] or 'the sender'} wrote:"
+
+
+def compose(text, html, signature=None, orig=None):
+    """The body as Gmail writes it: your text, then your signature ("-- " and it), then the original quoted with
+    "On … wrote:" (Gmail's gmail_quote markup folds it behind "•••"). Without a signature or a quote the body is
+    left exactly as given."""
+    if not signature and not orig:
+        return text, html
+    text_out = (text or "").rstrip()
+    html_out = html if html else '<div dir="ltr">' + htmllib.escape(text or "").replace("\n", "<br>") + "</div>"
+    if signature:
+        text_out += "\n\n-- \n" + html_to_text(signature)
+        html_out += ('<br><span class="gmail_signature_prefix">-- </span><br>'
+                     f'<div dir="ltr" class="gmail_signature" data-smartmail="gmail_signature">{signature}</div>')
+    if orig:
+        line = quote_line(orig)
+        quoted_text = orig["text"] or ""
+        text_out += "\n\n" + line + "\n" + "\n".join(">" + (" " + q if q else "") for q in quoted_text.splitlines())
+        theirs = orig["html"] if orig["html"] else htmllib.escape(quoted_text).replace("\n", "<br>")
+        html_out += (f'<br><div class="gmail_quote"><div dir="ltr" class="gmail_attr">{htmllib.escape(line)}'
+                     '<br></div><blockquote class="gmail_quote" style="margin:0px 0px 0px 0.8ex;border-left:1px solid '
+                     f'rgb(204,204,204);padding-left:1ex">{theirs}</blockquote></div>')
+    return text_out, html_out
+
+
+def fetch_signature(me, bearer, get=http_get_json):
+    """Your Gmail signature for this address, from your own send-as settings. None when there is none or it can't
+    be read."""
+    try:
+        r = get(SENDAS_URL.format(email=urllib.parse.quote(me)), {"Authorization": f"Bearer {bearer}"})
+    except Refused:
+        return None
+    return (r.get("signature") or "").strip() or None
+
+
+def signature_path():
+    return HOME / "signature.html"
+
+
+def save_signature(sig):
+    """Keep the signature in ~/.gmail-send/signature.html (0600), used by every email; edit it freely. An empty
+    file means no signature."""
+    ensure_home()
+    path = signature_path()
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(sig or "")
+    return path
+
+
+def load_signature():
+    try:
+        return signature_path().read_text().strip() or None
+    except FileNotFoundError:
+        return None
+
+
+def refresh_signature(get=None, token=None):
+    """Fetch Gmail's signature again into the file (one scan)."""
+    me = load_config().get("account")
+    if not me:
+        raise Refused("not signed in: run `gmail-send login`")
+    bearer = (token or access_token)("read your Gmail signature to save it for gmail-send; nothing is sent")
+    sig = fetch_signature(me, bearer, get=get or http_get_json)
+    save_signature(sig)
+    return sig
+
+
+def reply_recipients(orig, me, reply_all):
+    """Gmail's rules: answer Reply-To (else From); a reply to your own email goes to its To; reply-all adds the
+    original To and Cc. You are left out, unless nobody else is on it."""
+    mine = lambda a: a.lower() == me.lower()  # noqa: E731
+    target = orig["reply_to"] or orig["from"]
+    if all(mine(a) for a in target):
+        target = orig["to"]
+    to, cc = list(target), []
+    if reply_all:
+        to += orig["to"]
+        cc = list(orig["cc"])
+    dedupe = lambda xs, skip=(): [a for i, a in enumerate(xs) if not mine(a) and a.lower() not in  # noqa: E731
+                                  {x.lower() for x in xs[:i]} | {s.lower() for s in skip}]
+    to = dedupe(to) or [me]  # a thread only with yourself: the reply goes to you
+    return to, dedupe(cc, skip=to)
+
+
+def reply_subject(original):
+    s = clean(original, 900)  # someone else's text: no line breaks, control or bidi characters
+    return s if s[:3].lower() == "re:" else f"Re: {s}"
+
+
+def reply_reason(msg_id, reply_all, to_values, cc_values, attachments, text, html, quote, draft, dry_run):
+    """The one prompt for a reply, shown before the original is read: names the email and who it goes to, or the
+    rule that picks them (`--dry-run` lists them by name)."""
+    if dry_run:
+        return f"read one email ({msg_id}) to preview a reply; nothing is sent"
+    who = ("everyone on it" if reply_all else "its sender") if not to_values else ", ".join(to_values)
+    if cc_values:
+        who += ", cc " + ", ".join(cc_values)
+    parts = [("save a draft reply" if draft else "send a reply") + f" to email {msg_id}, to {who}"
+             + (", quoting it" if quote else "")]
     if attachments:
         parts.append("attaching " + ", ".join(f"{clean(n, 60)} ({human(len(d))})" for n, d in attachments))
     if text:
@@ -381,52 +596,119 @@ def approval_reason(recipients, subject, attachments, text, html=None, me=None, 
     return "; ".join(parts)
 
 
-def summary(me, to, cc, subject, attachments, text, html):
-    lines = [f"From:     {me}", f"To:       {', '.join(to)}"]
+def approval_reason(recipients, subject, attachments, text, html=None, me=None, draft=False, reply=None):
+    """What macOS shows after "Gmail for Claude is trying to …"."""
+    who = ", ".join("you" if me and r.lower() == me.lower() else r for r in recipients)
+    verb = ("save a draft reply to " if draft else "send a reply to ") if reply else \
+        ("save a draft email to " if draft else "send an email to ")
+    parts = [verb + who]
+    if reply:
+        parts.append(f'in the thread of "{clean(reply["subject"], 60)}" from {", ".join(reply["from"]) or "?"}'
+                     + (", quoting it" if reply.get("text") is not None or reply.get("html") else ""))
+    parts.append(f'subject "{clean(subject, 80)}"')
+    if attachments:
+        parts.append("attaching " + ", ".join(f"{clean(n, 60)} ({human(len(d))})" for n, d in attachments))
+    if text:
+        parts.append(f'text "{clean(text, 150)}"')
+    if html:
+        parts.append(f"with an HTML version ({human(len(html.encode()))})")
+    return "; ".join(parts)
+
+
+def summary(me, to, cc, subject, attachments, text, html, reply=None, quoting=False, signature=False):
+    lines = [f"From:     {me}"]
+    if reply:
+        lines.append(f"Reply to: \"{clean(reply['subject'], 100)}\" from {', '.join(reply['from'])} "
+                     f"(message {reply['id']}, thread {reply['thread']})")
+    lines.append(f"To:       {', '.join(to)}")
     if cc:
         lines.append(f"Cc:       {', '.join(cc)}")
     lines.append(f"Subject:  {subject}")
+    if quoting:  # the quoted text is someone else's: counted, never printed
+        n = len((reply["text"] or "").splitlines())
+        lines.append(f"Quoting:  the original below your text ({n} line{'' if n == 1 else 's'}; "
+                     f"not shown here; --no-quote to leave it out)")
     for name, data in attachments:
         lines.append(f"Attach:   {name}  {human(len(data))}  sha256 {hashlib.sha256(data).hexdigest()}")
     if html:
         lines.append(f"HTML:     {human(len(html.encode()))} (sent with the text below as its plain version)")
+    if signature:
+        lines.append(f"Signature: from {signature_path()} (--no-signature to leave it out)")
     lines.append("Text:")
     lines += ["  " + line for line in (text or "(empty)").splitlines()] or ["  (empty)"]
     return "\n".join(lines)
 
 
 def send(to_values, cc_values, subject, text, files, html_file=None, dry_run=False, draft=False,
-         post_raw=None, token=access_token, out=print):
+         reply_to=None, reply_all=False, quote=True, signature=True, post_raw=None, get=None,
+         token=access_token, out=print, html_text=None):
+    """One Touch ID scan per send, draft or reply. The scan unlocks the sign-in and is the approval."""
+    get = get or http_get_json
     cfg = load_config()
     me = cfg.get("account")
     if not me:
         raise Refused("not signed in: run `gmail-send login`")
-    to = parse_recipients(to_values, me)
-    cc = [a for a in parse_recipients(cc_values, me) if a.lower() not in (t.lower() for t in to)]
+    roots = send_from_roots(cfg)
+    attachments = load_attachments(files, roots)  # refuse a bad file before any scan
+    html = html_text if html_text is not None else (sendable(html_file, roots).read_text() if html_file else None)
+    sig = load_signature() if signature else None
+    to_given = parse_recipients(to_values, me) if to_values else []
+    cc_given = parse_recipients(cc_values, me) if cc_values else []
+    reply, bearer = None, None
+    if reply_to:
+        scopes = cfg.get("scopes", [])
+        if quote and READ_SCOPE not in scopes:
+            raise Refused("quoting the original needs permission to read it: run `gmail-send login` again "
+                          "(or --no-quote)")
+        if not quote and READ_SCOPE not in scopes and METADATA_SCOPE not in scopes:
+            raise Refused("replying needs permission to read the original: run `gmail-send login` again")
+        if not GMAIL_ID.match(reply_to):
+            raise Refused(f"not a Gmail message id: {reply_to!r}")
+        out("Asking for Touch ID…")
+        bearer = token(reply_reason(reply_to, reply_all, to_given, cc_given, attachments, text, html, quote,
+                                    draft, dry_run))
+        reply = lookup_original(reply_to, bearer, get=get, quote=quote)
+        to_d, cc_d = reply_recipients(reply, me, reply_all)
+        to, cc = to_given or to_d, cc_given if cc_values else cc_d
+        subject = subject or reply_subject(reply["subject"])
+    else:
+        if reply_all:
+            raise Refused("--all needs --reply-to <message id>")
+        to, cc = to_given, cc_given
+    cc = [a for a in cc if a.lower() not in (t.lower() for t in to)]
     if not to:
         raise Refused("no recipient")
-    if not subject.strip():
+    if not (subject or "").strip():
         raise Refused("a subject is required (-s)")
-    roots = send_from_roots(cfg)
-    attachments = load_attachments(files, roots)
-    html = sendable(html_file, roots).read_text() if html_file else None
-    out(summary(me, to, cc, subject, attachments, text, html))
-    raw = build_message(me, to, cc, subject, text, attachments, html)
+    quoting = bool(reply and quote)
+    body_text, body_html = compose(text, html, sig, reply if quoting else None)
+    try:
+        raw = build_message(me, to, cc, subject, body_text, attachments, body_html,
+                            in_reply_to=reply and reply["message_id"], references=reply and reply["references"])
+    except ValueError as e:  # e.g. a line break in a header: never sent as written
+        raise Refused(f"can't build the email: {e}") from None
+    out(summary(me, to, cc, subject, attachments, text, html, reply, quoting, bool(sig)))
     if dry_run:
         out("Dry run: nothing sent or saved.")
         return None
+    if bearer is None:
+        out("Asking for Touch ID…")
+        bearer = token(approval_reason(to + cc, subject, attachments, text, html, me=me, draft=draft))
     poster = post_raw or http_json
-    reason = approval_reason(to + cc, subject, attachments, text, html, me=me, draft=draft)
-    out("Asking for Touch ID…")
-    bearer = token(reason)  # the scan that unlocks the sign-in is the approval; declining raises Refused
-    headers = {"Authorization": f"Bearer {bearer}", "Content-Type": "message/rfc822"}
+    auth = {"Authorization": f"Bearer {bearer}"}
+    if reply:
+        meta = {"message": {"threadId": reply["thread"]}} if draft else {"threadId": reply["thread"]}
+        body, ctype = multipart(meta, raw)
+        url = (DRAFT_URL if draft else SEND_URL).replace("uploadType=media", "uploadType=multipart")
+        res = poster(url, body, {**auth, "Content-Type": ctype})
+    else:
+        res = poster(DRAFT_URL if draft else SEND_URL, raw, {**auth, "Content-Type": "message/rfc822"})
     if draft:
-        res = poster(DRAFT_URL, raw, headers)
         out(f"Draft saved: {res.get('id')}. Check and send it from Gmail Drafts: "
             f"https://mail.google.com/mail/?authuser={urllib.parse.quote(me)}#drafts")
         return res
-    res = poster(SEND_URL, raw, headers)
-    out(f"Sent: message {res.get('id')} ({', '.join(res.get('labelIds') or [])})")
+    out(f"Sent: message {res.get('id')}" + (f" in thread {res.get('threadId')}" if reply else "") +
+        f" ({', '.join(res.get('labelIds') or [])})")
     return res
 
 
@@ -438,4 +720,7 @@ def status():
     lines.append(f"signed in: {account + ' (locked to Touch ID)' if account and signed_in() else 'no (gmail-send login)'}")
     lines.append(f"approval:  {'Touch ID on every send and draft' if os.access(approver_path(), os.X_OK) else 'helper missing: nothing can be sent (/gmail-setup)'}")
     lines.append("send from: " + ", ".join(cfg.get("send_from", DEFAULT_SEND_FROM)))
+    sig = load_signature()
+    lines.append(f"signature: {signature_path()} ({human(len(sig.encode()))})" if sig else
+                 f"signature: none ({signature_path()} is missing or empty; gmail-send signature --refresh)")
     return "\n".join(lines)
