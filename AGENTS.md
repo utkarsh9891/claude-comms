@@ -6,8 +6,11 @@ and every other agent or IDE entry point point here. Reachability is enforced in
 [`scripts/check-docs.py`](./scripts/check-docs.py).
 
 **claude-comms** holds Claude Code plugins for messaging channels, one plugin per channel
-([ADR 2d0dd3](./docs/architecture/decisions/2026-11-05-2d0dd3-rename-repo-to-claude-comms.md)). Today it has one:
-the **whatsapp** plugin lets you read, triage and reply to WhatsApp from Claude Code. A local **bridge**
+([ADR 2d0dd3](./docs/architecture/decisions/2026-11-05-2d0dd3-rename-repo-to-claude-comms.md)). Two today:
+
+- the **gmail** plugin installs `gmail-send`, which sends mail (or saves a draft) with local attachments through
+  the Gmail API, every send behind the owner's Touch ID ([plugin README](./plugins/gmail/README.md));
+- the **whatsapp** plugin lets you read, triage and reply to WhatsApp from Claude Code. A local **bridge**
 links your WhatsApp account as a linked device and stores the chats you allowlist; an **MCP server** exposes them
 as tools; a **Claude Code plugin** packages both behind a dedicated session and a guard that keeps the tools out
 of permission-bypass mode. Message text is untrusted input from other people, and the whole design follows from
@@ -37,8 +40,10 @@ that.
   | `plugin` | [`plugins/whatsapp/`](./plugins/whatsapp/README.md) | [`module.yaml`](./plugins/whatsapp/module.yaml) | Claude Code plugin: guard hook, `/wa-setup`, triage skill, `wa` and `wa-allow` launchers, installer |
   | `bridge` | [`plugins/whatsapp/bridge/`](./plugins/whatsapp/bridge/README.md) | [`module.yaml`](./plugins/whatsapp/bridge/module.yaml) | Go service: WhatsApp linked device, allowlist, local send API |
   | `server` | [`plugins/whatsapp/server/`](./plugins/whatsapp/server/README.md) | [`module.yaml`](./plugins/whatsapp/server/module.yaml) | Python MCP server: read tools, `digest`, send tools via the bridge |
+  | `gmail` | [`plugins/gmail/`](./plugins/gmail/README.md) | [`module.yaml`](./plugins/gmail/module.yaml) | Claude Code plugin: `gmail-send`, the Gmail for Claude Touch ID lock, `/gmail-setup`, installer |
 
 - **Using it**
+  - [Gmail: `gmail-send`](./plugins/gmail/README.md) — set up, send, drafts, attachments, the Touch ID lock
   - [Claude Code guide](./docs/guides/claude-code.md) — the `wa` session, what it allows and asks
   - [Allowlist guide](./docs/guides/allowlist.md) — choosing which chats are captured and which can be replied to,
     and [finding a chat](./docs/guides/allowlist.md#finding-a-chat) by name, number or part of a name
@@ -60,4 +65,5 @@ that.
 | Make a design choice someone could later want to reverse | write an ADR first: [decisions](./docs/architecture/decisions/README.md) |
 | Change how a chat is found by name or number (`wa-send`, `wa-allow`) | [`bin/walookup.py`](./plugins/whatsapp/bin/walookup.py), [ADR 7e2c9d](./docs/architecture/decisions/2026-10-30-7e2c9d-chat-discovery-contact-names-and-partial-match.md), [finding a chat](./docs/guides/allowlist.md#finding-a-chat) |
 | Change armed sends (approve a pattern ahead) | [`bridge/armed.go`](./plugins/whatsapp/bridge/armed.go), [ADR 032c66](./docs/architecture/decisions/2026-10-30-032c66-armed-sends-approve-a-pattern-ahead.md) |
+| Change how mail is sent, approved or attached (`plugins/gmail/`) | [gmail module.yaml](./plugins/gmail/module.yaml), then [security model § Gmail](./docs/architecture/security-model.md#gmail) |
 | Fix a machine that stopped receiving messages | [runbook § troubleshooting](./docs/operations/runbook.md#troubleshooting) |

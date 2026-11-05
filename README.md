@@ -3,6 +3,10 @@
 Claude Code plugins for your messaging channels, one plugin per channel
 ([ADR 2d0dd3](./docs/architecture/decisions/2026-11-05-2d0dd3-rename-repo-to-claude-comms.md)).
 
+**Gmail** (`gmail` plugin): `gmail-send` sends mail or saves a draft with local attachments through the Gmail API,
+every send behind your Touch ID; your own OAuth client, never one from this repo. See the
+[gmail plugin README](./plugins/gmail/README.md).
+
 **WhatsApp** (`whatsapp` plugin): read, triage and reply to WhatsApp from Claude Code, safely: only the chats you allowlist, in a dedicated
 session, with a hard block on permission-bypass mode.
 
