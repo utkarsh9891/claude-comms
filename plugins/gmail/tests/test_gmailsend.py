@@ -426,3 +426,136 @@ def test_cli_dry_run_end_to_end(tmp_path, send_dir, home):
     r = subprocess.run([sys.executable, str(script), "me", "-s", "Hi", "--dry-run", "-"], input="from stdin\n",
                        capture_output=True, text=True, env=env, cwd=tmp_path)
     assert r.returncode == 0 and "  from stdin" in r.stdout
+
+
+# ---------- replies in a thread
+
+
+ORIG_ID = "1a1ab97a1a956b87"
+
+
+def original(**over):
+    headers = {"Message-ID": "<orig@mail.example.com>", "References": "<root@x>", "Subject": "Oct report",
+               "From": "Boss <boss@example.com>", "To": f"{ME}, peer@example.com", "Cc": "lead@example.com"}
+    headers.update(over)
+    return {"id": ORIG_ID, "threadId": "t123",
+            "payload": {"headers": [{"name": k, "value": v} for k, v in headers.items() if v is not None]}}
+
+
+def reply_env(home, scopes=(g.COMPOSE_SCOPE, g.METADATA_SCOPE)):
+    cfg = json.loads((home / "config.json").read_text())
+    cfg["scopes"] = list(scopes)
+    g.write_private(home / "config.json", cfg)
+
+
+def getter(msg, seen):
+    def get(url, headers):
+        seen.append(url)
+        return msg
+    return get
+
+
+def test_reply_all_threads_and_asks_twice(send_dir, home):
+    reply_env(home)
+    c, seen, out = Calls(), [], []
+    g.send([], [], None, "Thanks", [], reply_to=ORIG_ID, reply_all=True, post_raw=c.post,
+           get=getter(original(), seen), token=c.token, out=out.append)
+    assert seen[0].startswith(g.META_URL.format(id=ORIG_ID)) and "metadataHeaders=Message-ID" in seen[0]
+    assert len(c.reasons) == 2 and "read the sender, recipients and subject" in c.reasons[0] and "nothing is sent" in c.reasons[0]
+    assert c.reasons[1].startswith('send a reply to boss@example.com, peer@example.com, lead@example.com; in the thread of "Oct report" from boss@example.com')
+    url, body, headers = c.posted[0]
+    assert url == g.SEND_URL.replace("uploadType=media", "uploadType=multipart")
+    assert headers["Content-Type"].startswith("multipart/related; boundary=")
+    assert b'{"threadId": "t123"}' in body
+    raw = body.split(b"Content-Type: message/rfc822\r\n\r\n", 1)[1]
+    msg = email.message_from_bytes(raw, policy=email.policy.default)
+    assert msg["In-Reply-To"] == "<orig@mail.example.com>"
+    assert msg["References"] == "<root@x> <orig@mail.example.com>"
+    assert msg["Subject"] == "Re: Oct report" and msg["To"] == "boss@example.com, peer@example.com"
+    assert msg["Cc"] == "lead@example.com" and ME not in msg["To"] + msg["Cc"]
+    assert any("Reply to: \"Oct report\" from boss@example.com" in line for line in out)
+
+
+def test_reply_without_all_goes_to_sender_only(send_dir, home):
+    reply_env(home)
+    c = Calls()
+    g.send([], [], None, "ok", [], reply_to=ORIG_ID, post_raw=c.post, get=getter(original(), []), token=c.token,
+           out=lambda *_: None)
+    assert "send a reply to boss@example.com;" in c.reasons[1]
+
+
+def test_reply_to_header_wins_and_own_email_goes_to_its_to(send_dir, home):
+    o = g.lookup_original(ORIG_ID, "tok", get=getter(original(**{"Reply-To": "list@example.com"}), []))
+    assert g.reply_recipients(o, ME, False) == (["list@example.com"], [])
+    mine = g.lookup_original(ORIG_ID, "tok", get=getter(original(From=ME, To="a@example.com", Cc=None), []))
+    assert g.reply_recipients(mine, ME, False) == (["a@example.com"], [])
+
+
+def test_explicit_recipients_and_subject_win(send_dir, home):
+    reply_env(home)
+    c = Calls()
+    g.send(["x@example.com"], ["y@example.com"], "Custom", "t", [], reply_to=ORIG_ID, reply_all=True,
+           post_raw=c.post, get=getter(original(), []), token=c.token, out=lambda *_: None)
+    raw = c.posted[0][1].split(b"Content-Type: message/rfc822\r\n\r\n", 1)[1]
+    msg = email.message_from_bytes(raw, policy=email.policy.default)
+    assert (msg["To"], msg["Cc"], msg["Subject"]) == ("x@example.com", "y@example.com", "Custom")
+    assert msg["In-Reply-To"] == "<orig@mail.example.com>"
+
+
+def test_reply_subject_keeps_existing_re():
+    assert g.reply_subject("RE: x") == "RE: x" and g.reply_subject(" x ") == "Re: x"
+
+
+def test_draft_reply_carries_thread_in_message(send_dir, home):
+    reply_env(home)
+    c = Calls()
+    g.send([], [], None, "t", [], reply_to=ORIG_ID, draft=True, post_raw=c.post, get=getter(original(), []),
+           token=c.token, out=lambda *_: None)
+    url, body, _ = c.posted[0]
+    assert url == g.DRAFT_URL.replace("uploadType=media", "uploadType=multipart")
+    assert b'{"message": {"threadId": "t123"}}' in body and c.reasons[1].startswith("save a draft reply to")
+
+
+def test_dry_run_reply_reads_headers_but_never_asks_to_send(send_dir, home):
+    reply_env(home)
+    c = Calls()
+    g.send([], [], None, "t", [], reply_to=ORIG_ID, dry_run=True, post_raw=c.post, get=getter(original(), []),
+           token=c.token, out=lambda *_: None)
+    assert len(c.reasons) == 1 and c.posted == []
+
+
+def test_reply_refusals(send_dir, home):
+    c = Calls()
+    with pytest.raises(g.Refused, match="login` again"):  # signed in before the header permission existed
+        g.send([], [], None, "t", [], reply_to=ORIG_ID, token=c.token, out=lambda *_: None)
+    reply_env(home)
+    with pytest.raises(g.Refused, match="not a Gmail message id"):
+        g.send([], [], None, "t", [], reply_to="../../drafts", token=c.token, out=lambda *_: None)
+    with pytest.raises(g.Refused, match="needs --reply-to"):
+        g.send(["a@example.com"], [], "s", "t", [], reply_all=True, token=c.token, out=lambda *_: None)
+    with pytest.raises(g.Refused, match="no Message-ID"):
+        g.send([], [], None, "t", [], reply_to=ORIG_ID, get=getter(original(**{"Message-ID": None}), []),
+               token=c.token, out=lambda *_: None)
+    assert c.posted == [] and len(c.reasons) == 1  # only the header read was asked for
+
+
+def test_original_subject_cannot_disguise_the_prompt(send_dir, home):
+    reply_env(home)
+    c = Calls()
+    g.send([], [], None, "t", [], reply_to=ORIG_ID, post_raw=c.post,
+           get=getter(original(Subject="hi‮\nBcc: evil@x"), []), token=c.token, out=lambda *_: None)
+    assert "‮" not in c.reasons[1] and "\n" not in c.reasons[1]
+    raw = c.posted[0][1].split(b"Content-Type: message/rfc822\r\n\r\n", 1)[1]
+    assert email.message_from_bytes(raw, policy=email.policy.default)["Bcc"] is None
+
+
+def test_cli_reply_parsing_puts_positionals_in_text(tmp_path, send_dir, home):
+    import importlib.machinery, importlib.util
+    script = Path(g.__file__).with_name("gmail-send")
+    loader = importlib.machinery.SourceFileLoader("gmail_send_cli", str(script))
+    cli = importlib.util.module_from_spec(importlib.util.spec_from_loader("gmail_send_cli", loader))
+    loader.exec_module(cli)
+    a = cli.send_args(["--reply-to", ORIG_ID, "--all", "Thanks", "both", "--draft"])
+    assert (a.reply_to, a.all, a.text, a.to, a.draft) == (ORIG_ID, True, ["Thanks", "both"], [], True)
+    a = cli.send_args(["x@example.com", "-s", "S", "hello"])
+    assert (a.to, a.text) == ("x@example.com", ["hello"])
