@@ -294,17 +294,26 @@ def access_token(reason, post=http_json, unlock=unlock_token):
     return access_key(reason, post=post, unlock=unlock)[0]
 
 
-def access_key(reason, post=http_json, unlock=unlock_token):
-    """Like access_token, plus how many seconds Google says the key lives (an hour)."""
+def access_key(reason, post=http_json, unlock=unlock_token, scope=None):
+    """Like access_token, plus how many seconds Google says the key lives (an hour). With `scope`, asks Google for a
+    key limited to those permissions (a subset of the sign-in's) and refuses one that comes back broader."""
     client = load_client()
     refresh = unlock(reason)
+    fields = {"client_id": client["client_id"], "client_secret": client.get("client_secret", ""),
+              "refresh_token": refresh, "grant_type": "refresh_token"}
+    if scope:
+        fields["scope"] = scope
     try:
-        tok = post(TOKEN_URL, form({"client_id": client["client_id"], "client_secret": client.get("client_secret", ""),
-                                    "refresh_token": refresh, "grant_type": "refresh_token"}), FORM)
+        tok = post(TOKEN_URL, form(fields), FORM)
     except Refused as e:
         if "invalid_grant" in str(e) or "expired or revoked" in str(e).lower():
             raise Refused("your Google sign-in expired or was revoked: run `gmail-send login`") from None
         raise
+    if scope:
+        granted = set(tok.get("scope", "").split())
+        if not granted or not granted <= set(scope.split()):
+            raise Refused("Google didn't issue a key limited to sending (it came back with: "
+                          f"{' '.join(sorted(granted)) or 'no scope listed'}); nothing was armed")
     return tok["access_token"], int(tok.get("expires_in", 3599))
 
 
@@ -646,8 +655,9 @@ def summary(me, to, cc, subject, attachments, text, html, reply=None, quoting=Fa
 
 
 # ---------- armed sends: approve a pattern with one scan, then matching mail goes out unattended for up to an hour
-# The scan mints Google's one-hour access key; it is kept in armed.json (0600) for the window and deleted when the
-# window or its uses run out. The sealed sign-in itself never leaves the lock. ADR 2026-11-05-c41e0b.
+# The scan mints a one-hour Google access key limited to gmail.compose (send and drafts; it can't read the inbox),
+# kept in armed.json (0600) for the window and deleted when the window or its uses run out. The sealed sign-in itself
+# never leaves the lock. ADR 2026-11-05-c41e0b.
 
 SLOTS = {
     "num": (r"[0-9][0-9.,]{0,19}", "a number"),
@@ -655,6 +665,7 @@ SLOTS = {
     "url": (r"https://[^\s]{1,192}", "an https link"),
     "text": (r"[^\n]{1,100}", "any line of up to 100 characters"),
 }
+ARMED_SCOPE = COMPOSE_SCOPE  # the stored key can send and manage drafts, never read the inbox
 MAX_PATTERN = 150
 MAX_TIMES = 20
 KEY_MARGIN = 120  # stop using a key two minutes before Google expires it
@@ -764,7 +775,7 @@ def arm(to_values, cc_values, subject_pattern, text_pattern, for_value=None, tim
               f'; subject "{subject_pattern}"; text "{text_pattern}"'.replace("\n", " ") +
               (f" ({describe_slots(kinds)})" if kinds else "") + "; no files, no HTML")
     out("Asking for Touch ID to arm…")
-    bearer, lives = key(reason)
+    bearer, lives = key(reason, scope=ARMED_SCOPE)
     now = clock()
     key_until = now + lives - KEY_MARGIN
     until = min(now + want, key_until) if want else key_until

@@ -718,8 +718,9 @@ class Key:
     def __init__(self, lives=3599):
         self.reasons, self.lives = [], lives
 
-    def __call__(self, reason):
+    def __call__(self, reason, scope=None):
         self.reasons.append(reason)
+        self.scope = scope
         return "armed-key", self.lives
 
 
@@ -833,3 +834,29 @@ def test_disarm_one_or_all_without_a_scan(send_dir):
     g.arm(["me"], [], "Pong {num}", "", key=Key(), out=lambda *_: None)
     assert g.disarm(a["id"]) == 1 and [e["subject"] for e in g.armed_list()] == ["Pong {num}"]
     assert g.disarm() == 1 and not g.armed_path().exists()
+
+
+def test_arming_asks_google_for_a_send_only_key(send_dir):
+    k = Key()
+    g.arm(["me"], [], "Ping {num}", "", key=k, out=lambda *_: None)
+    assert k.scope == g.COMPOSE_SCOPE and "readonly" not in k.scope
+
+
+@pytest.mark.parametrize("granted,ok", [
+    (g.COMPOSE_SCOPE, True),
+    (g.COMPOSE_SCOPE + " " + g.READ_SCOPE, False),  # Google ignored the narrowing: refuse, store nothing
+    ("", False),
+])
+def test_access_key_refuses_a_broader_key_than_asked(send_dir, granted, ok):
+    seen = []
+
+    def post(url, data, headers):
+        seen.append(dict(urllib.parse.parse_qsl(data.decode())))
+        return {"access_token": "k", "expires_in": 3599, "scope": granted}
+
+    if ok:
+        assert g.access_key("why", post=post, unlock=lambda r: "1//r", scope=g.COMPOSE_SCOPE) == ("k", 3599)
+    else:
+        with pytest.raises(g.Refused, match="limited to sending"):
+            g.access_key("why", post=post, unlock=lambda r: "1//r", scope=g.COMPOSE_SCOPE)
+    assert seen[0]["scope"] == g.COMPOSE_SCOPE
