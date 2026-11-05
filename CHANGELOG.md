@@ -43,6 +43,11 @@ Notable changes per plugin version (`plugins/<plugin>/.claude-plugin/plugin.json
   `~/Downloads`, `~/Desktop`, `~/Documents` and `~/Pictures`. Set up with `/gmail-setup`
   ([plugin README](./plugins/gmail/README.md)).
 
+## 0.10.3 — 2026-11-05
+
+- The installer also builds the bridge against the older SDK when it had to fall back for the Touch ID helper:
+  the bridge's cgo link step fails the same way (*unknown architecture … arm64e*). The helper is now built first.
+
 ## 0.10.2 — 2026-11-05
 
 - The installer builds the Touch ID helper even when the Command Line Tools' newest SDK is newer than their Swift

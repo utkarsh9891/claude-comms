@@ -28,8 +28,10 @@ need() {
   xcrun --find swiftc >/dev/null 2>&1 || die "missing: swiftc (xcode-select --install)"
 }
 
-# Command Line Tools can ship an SDK newer than their compiler ("this SDK is not supported by the compiler"); then
-# try each installed macOS SDK, newest first. The helper's source and behaviour are unchanged (threat T4).
+# Command Line Tools can ship an SDK newer than their compilers ("this SDK is not supported by the compiler", or a
+# link error in the Go bridge's cgo step); then try each installed macOS SDK, newest first, and remember the one
+# that worked in FALLBACK_SDK so the bridge builds against it too. Sources and behaviour are unchanged (threat T4).
+FALLBACK_SDK=""
 build_helper() {
   local out="$1" src="$PLUGIN_ROOT/approve/wa-approve.swift" sdk log dev
   log="$(mktemp)"
@@ -37,6 +39,7 @@ build_helper() {
   dev="$(xcode-select -p)"
   while IFS= read -r sdk; do
     if xcrun swiftc -O -sdk "$sdk" -o "$out" "$src" 2>>"$log"; then
+      FALLBACK_SDK="$sdk"
       say "built the Touch ID helper against $(basename "$sdk") (the default SDK doesn't match this compiler)"
       rm -f "$log"
       return 0
@@ -54,10 +57,14 @@ do_install() {
   service_loaded && was_running=true
 
   rm -rf "$APP.new"
-  say "building bridge…"
-  (cd "$PLUGIN_ROOT/bridge" && go build -o "$APP.new/whatsapp-bridge" .)
   say "building Touch ID helper…"
   build_helper "$APP.new/WhatsApp for Claude"
+  say "building bridge…"
+  if [ -n "$FALLBACK_SDK" ]; then
+    (cd "$PLUGIN_ROOT/bridge" && SDKROOT="$FALLBACK_SDK" go build -o "$APP.new/whatsapp-bridge" .)
+  else
+    (cd "$PLUGIN_ROOT/bridge" && go build -o "$APP.new/whatsapp-bridge" .)
+  fi
   say "installing MCP server…"
   cp -R "$PLUGIN_ROOT/server" "$APP.new/server"
   rm -rf "$APP.new/server/.venv" "$APP.new/server/tests"
