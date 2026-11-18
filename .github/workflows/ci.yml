@@ -39,7 +39,7 @@ jobs:
         with:
           go-version-file: plugins/whatsapp/bridge/go.mod
           cache-dependency-path: plugins/whatsapp/bridge/go.sum
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - run: uv run --with pytest python -m pytest tests -q
       - name: MCP server starts and lists its tools
         run: |
@@ -60,7 +60,7 @@ jobs:
           jq -e '[.plugins[].name] | index("gmail") and index("whatsapp")' .claude-plugin/marketplace.json
       - name: shellcheck
         run: shellcheck plugins/whatsapp/bin/install.sh plugins/whatsapp/bin/wa plugins/whatsapp/hooks/*.sh plugins/gmail/bin/install.sh
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - name: gmail-send tests
         working-directory: plugins/gmail
         run: uv run --no-project --with pytest python -m pytest tests -q
