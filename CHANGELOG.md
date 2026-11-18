@@ -3,6 +3,15 @@
 Notable changes per plugin version (`plugins/<plugin>/.claude-plugin/plugin.json`); unprefixed headings are the
 `whatsapp` plugin. Back to [AGENTS.md](./AGENTS.md).
 
+## 0.11.0 — 2026-11-18
+
+- **Setting up a Mac asks before installing the bridge.** On a Mac where it isn't installed yet, `/wa-setup` and the
+  runbook's "Set up another Mac" recipe first check whether WhatsApp Web is reachable (a web filter that blocks it
+  makes the bridge retry forever), then ask whether this Mac needs the bridge. Only a yes builds, pairs and starts
+  it and adds the `wa-send` section to `~/.claude/CLAUDE.md`; a no changes nothing. Existing installs aren't asked
+  again ([ADR 51b64d](./docs/architecture/decisions/2026-11-18-51b64d-bridge-setup-is-opt-in-per-machine.md)).
+- Runbook: how to remove WhatsApp from a Mac completely, and what a 403 at the websocket handshake means.
+
 ## gmail 0.3.1 — 2026-11-05
 
 - The plain-text version of a signature (and of a quoted HTML-only email) no longer gets a stray blank line

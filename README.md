@@ -29,6 +29,9 @@ Prereqs (macOS): `brew install go uv`.
 /wa-setup 91XXXXXXXXXX          # your number with country code → an 8-character pairing code
 ```
 
+On a Mac where it isn't installed yet, `/wa-setup` first checks whether WhatsApp Web is reachable and asks
+whether this Mac needs the bridge; nothing is installed unless you say yes.
+
 ## Use
 
 ```bash

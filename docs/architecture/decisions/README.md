@@ -44,3 +44,4 @@ agent) knows *why* this repo is the way it is and *when* a decision should be re
 | [2026-11-05-a5657a](./2026-11-05-a5657a-owner-only-merge-no-required-review.md) | Only the owner merges to `main`; no approving review required | repo | accepted |
 | [2026-11-05-c41e0b](./2026-11-05-c41e0b-gmail-armed-sends-one-hour-key.md) | Gmail armed sends: approve a pattern with one scan, send matching mail for up to an hour | gmail | amended by 886b10 |
 | [2026-11-05-886b10](./2026-11-05-886b10-gmail-armed-replies.md) | Gmail armed replies: read the email at arming, store the reply's context with the send-only key (designed, not built yet) | gmail | accepted |
+| [2026-11-18-51b64d](./2026-11-18-51b64d-bridge-setup-is-opt-in-per-machine.md) | Setting up a Mac asks before installing the WhatsApp bridge, after checking WhatsApp Web is reachable | plugin | accepted |
